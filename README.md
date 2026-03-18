@@ -1,13 +1,19 @@
-# Project Template
+# Attendance Exploration
 
 
-Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod
-tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim
-veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea
-commodo consequat. Duis aute irure dolor in reprehenderit in voluptate
-velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint
-occaecat cupidatat non proident, sunt in culpa qui officia deserunt
-mollit anim id est laborum.
+The school district has asked us to explore the current state of
+attendance. Questions include:
+
+- Is there a hinge point (or multiple) for academic achievement with
+  attendance? Does it vary by grade or other demographic subgroup?
+- For students that transition from poor to good attendance, are there
+  correlates we can identify like schools, grades, classes taken,
+  teachers, etc. that could be possible reasons for the change?
+- Which demographic subgroups are most impacted with poor attendance and
+  does poor attendance impact those groups equally in terms of academic
+  achievement (gpa, test scores, etc.)?
+- Are there long term impacts of consistently poor attendance (Chronic
+  Absenteeism) on things like credit, graduation, AP/CE enrollment, etc.
 
 ## Project Organization
 
@@ -16,9 +22,7 @@ mollit anim id est laborum.
 - `/data` Simulated and real data, the latter not pushed.
 - `/figures` PNG images and plots.
 - `/output` Output from model runs, not pushed.
-- `/presentations` Presentation slides.
 - `/private` A catch-all folder for miscellaneous files, not pushed.
-- `/writing` Paper, report, and case studies.
 - `/.quarto` Hidden Quarto project library, not pushed.
 - `/.venv` Hidden Python project library, not pushed.
 - `.gitignore` Hidden Git instructions file.
