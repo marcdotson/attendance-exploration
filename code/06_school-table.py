@@ -242,5 +242,5 @@ model_df.to_csv('./data/06_school_modeling_data.csv', index=False)
 
 print('===========================================')
 print('School data exported successfully!')
-print("Next, run: 07_clearinghouse-table.py")
+print("Next, run: 08_combine_data-table.py")
 print('===========================================')
