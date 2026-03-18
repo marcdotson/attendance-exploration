@@ -1,6 +1,9 @@
 # Python
 .venv
 
+# Quarto
+.quarto
+
 # R
 .Rproj.user
 .Rhistory
