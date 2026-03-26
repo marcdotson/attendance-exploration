@@ -347,6 +347,17 @@ def chart_q2_transitions(df: pd.DataFrame) -> None:
         all_changed_flags.append(_q2_school_changed_between_rows(sub.iloc[0], sub.iloc[-1]))
     pct_all_changed = 100.0 * float(np.mean(all_changed_flags)) if all_changed_flags else float("nan")
 
+    # Unique students per school (denominator for Q2 panel B ratios)
+    students_per_school = (
+        d.loc[d["current_school"].notna()]
+        .assign(
+            current_school=lambda x: x["current_school"].astype(str).str.strip().replace("", np.nan)
+        )
+        .dropna(subset=["current_school"])
+        .groupby("current_school")["student_number"]
+        .nunique()
+    )
+
     fig, axes = plt.subplots(1, 3, figsize=(13, 4))
 
     # A — Grade progression (was panel B)
@@ -356,7 +367,7 @@ def chart_q2_transitions(df: pd.DataFrame) -> None:
     ax.set_ylabel("Count")
     ax.set_title("A. Grade progression across transition")
 
-    # B — Improvers who did not change school: count by current_school (was panel C)
+    # B — Improvers who did not change school: improvers per school / students at school
     ax = axes[1]
     same_school = tdf.loc[~tdf["school_changed"]].copy()
     same_school = same_school[same_school["current_school"].notna()]
@@ -376,21 +387,35 @@ def chart_q2_transitions(df: pd.DataFrame) -> None:
             ax.set_axis_off()
         else:
             if len(counts) > 20:
-                rest = int(counts.iloc[20:].sum())
                 counts = counts.head(20)
-                if rest > 0:
-                    counts = pd.concat([counts, pd.Series({"Other": rest})])
-            y_pos = np.arange(len(counts))
-            ax.barh(y_pos, counts.values, color="#8172b3")
-            ax.set_yticks(y_pos)
-            labels = [str(s)[:40] + ("…" if len(str(s)) > 40 else "") for s in counts.index]
-            ax.set_yticklabels(labels, fontsize=7)
-            ax.invert_yaxis()
-            ax.set_xlabel("Number of improvers")
+            denom = pd.Series(
+                [students_per_school.get(s, np.nan) for s in counts.index],
+                index=counts.index,
+            )
+            ratio_s = counts / denom
+            ratio_s = ratio_s[(denom > 0) & ratio_s.notna() & np.isfinite(ratio_s)]
+            if ratio_s.empty:
+                ax.text(
+                    0.5,
+                    0.5,
+                    "Could not match schools to enrollment counts",
+                    ha="center",
+                    va="center",
+                    transform=ax.transAxes,
+                )
+                ax.set_axis_off()
+            else:
+                y_pos = np.arange(len(ratio_s))
+                ax.barh(y_pos, ratio_s.values, color="#8172b3")
+                ax.set_yticks(y_pos)
+                labels = [str(s)[:40] + ("…" if len(str(s)) > 40 else "") for s in ratio_s.index]
+                ax.set_yticklabels(labels, fontsize=7)
+                ax.invert_yaxis()
+                ax.set_xlabel("Improvers / unique students at school")
     else:
         ax.text(0.5, 0.5, "No improvers with same school", ha="center", va="center", transform=ax.transAxes)
         ax.set_axis_off()
-    ax.set_title("B. Improvers (no school change): students by school")
+    ax.set_title("B. Improvers: share by school")
 
     # C — School change: improvers vs all (was panel A)
     ax = axes[2]
