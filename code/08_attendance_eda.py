@@ -26,6 +26,15 @@ ACT_SCORE_COLUMNS = (
     "writing_score",
 )
 
+ETHNICITY_DUMMY_COLUMNS = (
+    "amerindian_alaskan",
+    "asian",
+    "black_african_amer",
+    "hawaiian_pacific_isl",
+    "white",
+)
+LATINX_INDICATOR_COLUMN = "ethnicity"
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -53,6 +62,7 @@ def _prep(df: pd.DataFrame) -> pd.DataFrame:
         "ac_count",
         "extracurricular_ind",
         "school_count",
+        "scram_membership",
     ):
         if c in out.columns:
             out[c] = pd.to_numeric(out[c], errors="coerce")
@@ -72,6 +82,30 @@ def _prep(df: pd.DataFrame) -> pd.DataFrame:
     )
     # K–12 chronic absenteeism: missing >= 10% of enrolled days
     out["_chronic"] = (out["_valid_enroll"]) & (out["_pct_absent"] >= 10.0)
+
+    def _is_positive(value: object) -> bool:
+        if pd.isna(value):
+            return False
+        if isinstance(value, (int, float, np.integer, np.floating)):
+            return value == 1
+        return str(value).strip().lower() in {"1", "y", "yes", "true", "t"}
+
+    def _ethnicity_label(row: pd.Series) -> str:
+        # If upstream ethnicity is a Latinx indicator, prioritize that mapping.
+        if LATINX_INDICATOR_COLUMN in row.index and _is_positive(row.get(LATINX_INDICATOR_COLUMN)):
+            return "latinx"
+        for c in ETHNICITY_DUMMY_COLUMNS:
+            if c in row.index and _is_positive(row.get(c)):
+                return c
+
+        raw = row.get(LATINX_INDICATOR_COLUMN, np.nan)
+        if pd.isna(raw):
+            return "unknown"
+        raw_str = str(raw).strip()
+        return raw_str if raw_str else "unknown"
+
+    if LATINX_INDICATOR_COLUMN in out.columns or any(c in out.columns for c in ETHNICITY_DUMMY_COLUMNS):
+        out["ethnicity"] = out.apply(_ethnicity_label, axis=1)
 
     return out
 
@@ -167,8 +201,9 @@ def chart_q1_hinge(df: pd.DataFrame) -> None:
     # C) Gender (if present)
     ax = axes[1, 0]
     if "gender" in base.columns:
-        for gend in base["gender"].dropna().unique()[:6]:
-            sub = base[base["gender"] == gend]
+        gender_vals = base["gender"].astype(str).str.strip().str.upper()
+        for gend in ["M", "F"]:
+            sub = base[gender_vals == gend]
             if len(sub) < 300:
                 continue
             sub = sub.copy()
@@ -178,20 +213,20 @@ def chart_q1_hinge(df: pd.DataFrame) -> None:
                 .agg(mean_gpa=("overall_gpa", "mean"), mid_att=("percent_days_attended", "mean"))
                 .reset_index()
             )
-            ax.plot(gagg["mid_att"], gagg["mean_gpa"], marker=".", label=str(gend))
+            ax.plot(gagg["mid_att"], gagg["mean_gpa"], marker=".", label=gend)
     ax.axvline(90, color="gray", linestyle=":", alpha=0.8)
     ax.set_xlabel("Percent days attended (bin center)")
     ax.set_ylabel("Mean GPA")
     ax.set_title("C. Mean GPA vs attendance by gender")
     ax.legend(fontsize=8)
 
-    # D) Ethnicity — top groups by count
+    # D) Ethnicity — White and Latinx only
     ax = axes[1, 1]
     if "ethnicity" in base.columns:
-        top_eth = base["ethnicity"].value_counts().head(6).index.tolist()
-        for eth in top_eth:
+        eth_labels = {"white": "White", "latinx": "Latinx"}
+        for eth in ["white", "latinx"]:
             sub = base[base["ethnicity"] == eth]
-            if len(sub) < 300:
+            if len(sub) < 50:
                 continue
             sub = sub.copy()
             sub["att_bin"] = pd.cut(sub["percent_days_attended"], bins=bins, include_lowest=True)
@@ -200,11 +235,11 @@ def chart_q1_hinge(df: pd.DataFrame) -> None:
                 .agg(mean_gpa=("overall_gpa", "mean"), mid_att=("percent_days_attended", "mean"))
                 .reset_index()
             )
-            ax.plot(gagg["mid_att"], gagg["mean_gpa"], marker=".", label=str(eth)[:20])
+            ax.plot(gagg["mid_att"], gagg["mean_gpa"], marker=".", label=eth_labels[eth])
     ax.axvline(90, color="gray", linestyle=":", alpha=0.8)
     ax.set_xlabel("Percent days attended (bin center)")
     ax.set_ylabel("Mean GPA")
-    ax.set_title("D. Mean GPA vs attendance by ethnicity (top groups)")
+    ax.set_title("D. Mean GPA vs attendance by ethnicity (White and Latinx)")
     ax.legend(fontsize=7)
 
     fig.suptitle(
@@ -254,6 +289,15 @@ def chart_q1_act(df: pd.DataFrame) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _q2_school_changed_between_rows(r0: pd.Series, r1: pd.Series) -> bool:
+    """True if current_school differs between two year-rows (same rule as Q2 improver logic)."""
+    return (
+        str(r0.get("current_school", "")) != str(r1.get("current_school", ""))
+        if pd.notna(r0.get("current_school")) or pd.notna(r1.get("current_school"))
+        else False
+    )
+
+
 def chart_q2_transitions(df: pd.DataFrame) -> None:
     d = _prep(df)
     d = d[d["_valid_enroll"]].copy()
@@ -274,65 +318,97 @@ def chart_q2_transitions(df: pd.DataFrame) -> None:
         sub = d[d["student_number"] == sid].sort_values("year")
         r0 = sub[sub["year"] == trans.at[sid, "first_poor_year"]].iloc[0]
         r1 = sub[sub["year"] == trans.at[sid, "first_good_year"]].iloc[0]
-        school_changed = (
-            str(r0.get("current_school", "")) != str(r1.get("current_school", ""))
-            if pd.notna(r0.get("current_school")) or pd.notna(r1.get("current_school"))
-            else False
-        )
+        school_changed = _q2_school_changed_between_rows(r0, r1)
         grade_delta = float(r1.get("current_grade", np.nan)) - float(
             r0.get("current_grade", np.nan)
-        )
-        ac_jump = int(
-            (pd.notna(r1.get("ac_ind")) and pd.notna(r0.get("ac_ind")))
-            and (r1.get("ac_ind", 0) > r0.get("ac_ind", 0))
         )
         rows.append(
             {
                 "student_number": sid,
                 "school_changed": school_changed,
                 "grade_delta": grade_delta,
-                "ac_started": ac_jump,
+                "current_school": r1.get("current_school"),
             }
         )
 
     if not rows:
-        print("No poor→good transitions found; skipping Q2 charts.")
         return
 
     tdf = pd.DataFrame(rows)
 
+    pct_improver_changed = 100.0 * tdf["school_changed"].mean()
+
+    # All students (≥2 years): school at first observed year vs last observed year
+    all_changed_flags: list[bool] = []
+    for _, sub in d.groupby("student_number", sort=False):
+        sub = sub.sort_values("year")
+        if len(sub) < 2:
+            continue
+        all_changed_flags.append(_q2_school_changed_between_rows(sub.iloc[0], sub.iloc[-1]))
+    pct_all_changed = 100.0 * float(np.mean(all_changed_flags)) if all_changed_flags else float("nan")
+
     fig, axes = plt.subplots(1, 3, figsize=(13, 4))
 
+    # A — Grade progression (was panel B)
     ax = axes[0]
-    vc = tdf["school_changed"].value_counts(normalize=True).reindex([True, False], fill_value=0)
-    ax.bar(["Changed school", "Same school"], [vc.get(True, 0), vc.get(False, 0)], color=["#c44e52", "#4c72b0"])
-    ax.set_ylabel("Share of improvers")
-    ax.set_title("A. School at first poor vs first good year")
-    ax.set_ylim(0, 1)
-
-    ax = axes[1]
     ax.hist(tdf["grade_delta"].dropna(), bins=range(-3, 5), color="#55a868", edgecolor="white")
-    ax.set_xlabel("Grade level change (good year − poor year)")
+    ax.set_xlabel("Grade level change")
     ax.set_ylabel("Count")
-    ax.set_title("B. Grade progression across transition")
+    ax.set_title("A. Grade progression across transition")
 
+    # B — Improvers who did not change school: count by current_school (was panel C)
+    ax = axes[1]
+    same_school = tdf.loc[~tdf["school_changed"]].copy()
+    same_school = same_school[same_school["current_school"].notna()]
+    if len(same_school):
+        vc_school = same_school["current_school"].astype(str).str.strip()
+        vc_school = vc_school.replace("", np.nan).dropna()
+        counts = vc_school.value_counts()
+        if len(counts) == 0:
+            ax.text(
+                0.5,
+                0.5,
+                "No valid current_school values",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+            )
+            ax.set_axis_off()
+        else:
+            if len(counts) > 20:
+                rest = int(counts.iloc[20:].sum())
+                counts = counts.head(20)
+                if rest > 0:
+                    counts = pd.concat([counts, pd.Series({"Other": rest})])
+            y_pos = np.arange(len(counts))
+            ax.barh(y_pos, counts.values, color="#8172b3")
+            ax.set_yticks(y_pos)
+            labels = [str(s)[:40] + ("…" if len(str(s)) > 40 else "") for s in counts.index]
+            ax.set_yticklabels(labels, fontsize=7)
+            ax.invert_yaxis()
+            ax.set_xlabel("Number of improvers")
+    else:
+        ax.text(0.5, 0.5, "No improvers with same school", ha="center", va="center", transform=ax.transAxes)
+        ax.set_axis_off()
+    ax.set_title("B. Improvers (no school change): students by school")
+
+    # C — School change: improvers vs all (was panel A)
     ax = axes[2]
     ax.bar(
-        ["Advanced course flag increased", "No increase"],
+        ["Improvers\n(poor→good)", "All students\n(≥2 years)"],
         [
-            tdf["ac_started"].mean(),
-            1 - tdf["ac_started"].mean(),
+            pct_improver_changed / 100.0,
+            pct_all_changed / 100.0 if np.isfinite(pct_all_changed) else 0.0,
         ],
-        color=["#8172b3", "#ccb974"],
+        color=["#c44e52", "#4c72b0"],
     )
-    ax.set_ylabel("Share of improvers")
-    ax.set_title("C. AP/CE/concurrent participation (ac_ind)")
-    ax.set_ylim(0, 1)
+    ax.set_ylabel("Share with school change")
+    ax.set_title("C. School change: improvers vs all students")
+    ax.set_ylim(0, 0.2)
+    ax.tick_params(axis="x", labelsize=8)
 
     fig.suptitle(
-        "Q2 — Students who moved from poor (<90%) to good (≥95%) attendance on different years\n"
-        "Teacher-level correlates are not in exploratory_data.csv (teacher merge disabled in pipeline).",
-        fontsize=10,
+        "Q2 — Students who moved from poor (<90%) to good (≥95%) attendance on different years\n",
         y=1.05,
     )
     fig.tight_layout()
@@ -364,54 +440,62 @@ def chart_q3_demographics(df: pd.DataFrame) -> None:
     else:
         ax.set_visible(False)
 
-    # B) ell_disability_group
+    # B) Chronic rate by gender
     ax = axes[0, 1]
-    if "ell_disability_group" in base.columns:
-        grp = base["ell_disability_group"].value_counts().head(8).index
-        rates = [chronic_rate(base[base["ell_disability_group"] == g]) for g in grp]
-        ax.barh([str(g)[:28] for g in grp], rates, color="#c44e52")
-        ax.set_xlabel("Share chronically absent")
-        ax.set_title("B. Chronic rate by ELL × disability group")
-    else:
-        ax.set_visible(False)
-
-    # C) Gender
-    ax = axes[1, 0]
     if "gender" in base.columns:
-        labels: list[str] = []
-        rates_g: list[float] = []
-        for g in base["gender"].dropna().unique()[:6]:
-            sub = base[base["gender"] == g]
-            if len(sub) < 100:
-                continue
-            labels.append(str(g))
-            rates_g.append(chronic_rate(sub))
-        if labels:
-            ax.bar(labels, rates_g, color="#55a868")
-        ax.set_ylabel("Share chronically absent")
-        ax.set_title("C. Chronic rate by gender")
+        gender_vals = base["gender"].astype(str).str.strip().str.upper()
+        grp = [g for g in ["M", "F"] if (gender_vals == g).any()]
+        rates = [chronic_rate(base[gender_vals == g]) for g in grp]
+        ax.bar([str(g)[:18] for g in grp], rates, color="#c44e52")
+        ax.set_xlabel("Share chronically absent")
+        ax.set_title("B. Chronic rate by gender")
+        ax.tick_params(axis="x", rotation=20)
     else:
         ax.set_visible(False)
 
-    # D) GPA: chronic vs not by ethnicity (top groups)
-    ax = axes[1, 1]
+    # C) GPA gap by ethnicity: non-chronic mean minus chronic mean
+    ax = axes[1, 0]
     if "ethnicity" in base.columns:
         eth = base["ethnicity"].value_counts().head(6).index
-        x = np.arange(len(eth))
-        w = 0.35
-        means_ch = []
-        means_nc = []
+        labels = []
+        gaps = []
         for e in eth:
             sub = base[base["ethnicity"] == e]
-            means_ch.append(sub.loc[sub["_chronic"], "overall_gpa"].mean())
-            means_nc.append(sub.loc[~sub["_chronic"], "overall_gpa"].mean())
-        ax.bar(x - w / 2, means_nc, w, label="Not chronic", color="#8c8c8c")
-        ax.bar(x + w / 2, means_ch, w, label="Chronic", color="#d62728")
-        ax.set_xticks(x)
-        ax.set_xticklabels([str(e)[:12] for e in eth], rotation=25, ha="right")
-        ax.set_ylabel("Mean cumulative GPA")
-        ax.set_title("D. Mean GPA: chronic vs not (by ethnicity)")
-        ax.legend()
+            mean_nc = sub.loc[~sub["_chronic"], "overall_gpa"].mean()
+            mean_ch = sub.loc[sub["_chronic"], "overall_gpa"].mean()
+            gap = mean_nc - mean_ch
+            if pd.notna(gap):
+                labels.append(str(e)[:12])
+                gaps.append(gap)
+        ax.bar(labels, gaps, color="#4c72b0")
+        ax.axhline(0, color="gray", linestyle=":", alpha=0.8)
+        ax.set_ylabel("GPA gap (non-chronic − chronic)")
+        ax.set_title("C. Mean GPA gap by ethnicity")
+        ax.tick_params(axis="x", rotation=25)
+    else:
+        ax.set_visible(False)
+
+    # D) GPA gap by gender: non-chronic mean minus chronic mean
+    ax = axes[1, 1]
+    if "gender" in base.columns:
+        gender_vals = base["gender"].astype(str).str.strip().str.upper()
+        grp = [g for g in ["M", "F"] if (gender_vals == g).any()]
+        labels = []
+        gaps = []
+        for g in grp:
+            sub = base[gender_vals == g]
+            mean_nc = sub.loc[~sub["_chronic"], "overall_gpa"].mean()
+            mean_ch = sub.loc[sub["_chronic"], "overall_gpa"].mean()
+            gap = mean_nc - mean_ch
+            if pd.notna(gap):
+                labels.append(g)
+                gaps.append(gap)
+        ax.bar(labels, gaps, color="#55a868")
+        ax.axhline(0, color="gray", linestyle=":", alpha=0.8)
+        ax.set_ylabel("GPA gap (non-chronic − chronic)")
+        ax.set_title("D. Mean GPA gap by gender")
+    else:
+        ax.set_visible(False)
 
     fig.suptitle(
         "Q3 — Who is most impacted by chronic absence, and is GPA impact similar?\n"
@@ -463,6 +547,67 @@ def chart_q3_act_gap(df: pd.DataFrame) -> None:
     _save(fig, "eda_q3_act_gap_ethnicity.png")
 
 
+def chart_q3_disability(df: pd.DataFrame) -> None:
+    d = _prep(df)
+    base = d[d["_valid_enroll"]].copy()
+
+    if "scram_membership" not in base.columns:
+        print("Skipping Q3 disability chart (missing scram_membership).")
+        return
+
+    base["_disability_group"] = np.where(
+        base["scram_membership"].fillna(0) > 0,
+        "Disability (scram_membership > 0)",
+        "No disability (scram_membership <= 0)",
+    )
+
+    order = [
+        "No disability (scram_membership <= 0)",
+        "Disability (scram_membership > 0)",
+    ]
+
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
+
+    # A) Chronic rate by disability status
+    ax = axes[0]
+    chronic_rates = (
+        base.groupby("_disability_group", observed=True)["_chronic"].mean().reindex(order).dropna()
+    )
+    ax.bar(chronic_rates.index, chronic_rates.values, color=["#4c72b0", "#c44e52"])
+    ax.set_ylabel("Share chronically absent")
+    ax.set_title("A. Chronic rate by disability status")
+    ax.tick_params(axis="x", rotation=15)
+
+    # B) GPA gap by disability status (non-chronic − chronic)
+    ax = axes[1]
+    labels: list[str] = []
+    gaps: list[float] = []
+    for grp in order:
+        sub = base[base["_disability_group"] == grp]
+        if sub.empty:
+            continue
+        mean_nc = sub.loc[~sub["_chronic"], "overall_gpa"].mean()
+        mean_ch = sub.loc[sub["_chronic"], "overall_gpa"].mean()
+        gap = mean_nc - mean_ch
+        if pd.notna(gap):
+            labels.append(grp)
+            gaps.append(gap)
+    ax.bar(labels, gaps, color=["#55a868", "#8172b3"][: len(labels)])
+    ax.axhline(0, color="gray", linestyle=":", alpha=0.8)
+    ax.set_ylabel("GPA gap (non-chronic − chronic)")
+    ax.set_title("B. Mean GPA gap by disability status")
+    ax.tick_params(axis="x", rotation=15)
+
+    fig.suptitle(
+        "Q3 (supplement) — Disability status, chronic absence, and GPA gap\n"
+        "Disability defined as scram_membership > 0.",
+        fontsize=10,
+        y=1.03,
+    )
+    fig.tight_layout()
+    _save(fig, "eda_q3_disability_chronic_gpa_gap.png")
+
+
 # ---------------------------------------------------------------------------
 # Q4 — Long-run chronic burden vs outcomes (proxies: no graduation/credit in this CSV)
 # ---------------------------------------------------------------------------
@@ -486,32 +631,37 @@ def chart_q4_longrun(df: pd.DataFrame) -> None:
     st["gpa_last"] = last_obs["overall_gpa"]
     st["composite"] = last_obs["composite_score"]
 
-    # Burden categories
-    def bucket(row: pd.Series) -> str:
-        if row["years"] < 2:
-            return "Single year only"
-        fc = row["frac_chronic"]
-        if fc == 0:
-            return "Never chronic"
-        if fc < 0.34:
-            return "Low burden"
-        if fc < 0.67:
-            return "Moderate burden"
-        return "High burden (most years)"
-
-    st["burden"] = st.apply(bucket, axis=1)
-    order = [
-        "Never chronic",
-        "Single year only",
-        "Low burden",
-        "Moderate burden",
-        "High burden (most years)",
-    ]
+    # Burden = count of chronic years per student (one row per student in st)
+    cy_raw = st["chronic_years"].fillna(0).astype(int).clip(lower=0)
+    st["burden"] = np.select(
+        [cy_raw == 0, cy_raw == 1, cy_raw == 2, cy_raw == 3, cy_raw >= 4],
+        ["No Burden", "1 Year", "2 Years", "3 Years", "4 Years"],
+        default="4 Years",
+    )
+    order = ["No Burden", "1 Year", "2 Years", "3 Years", "4 Years"]
+    plot_order = [b for b in order if b in st["burden"].values]
 
     fig, axes = plt.subplots(2, 2, figsize=(11, 9))
 
+    # A) Student counts by chronic years — omit "No Burden" (only 1–4+ years)
     ax = axes[0, 0]
-    plot_order = [b for b in order if b in st["burden"].values]
+    burden_years = cy_raw
+    burden_binned = burden_years.where(burden_years <= 4, 4)
+    burden_counts = burden_binned.value_counts().reindex([1, 2, 3, 4], fill_value=0)
+    ax.bar(["1 Year", "2 Years", "3 Years", "4 Years"], burden_counts.values, color="#4c72b0")
+    ax.set_ylabel("Student count")
+    ax.set_title("A. Students by chronic burden years")
+
+    # B) Advanced course share (swapped with former GPA panel)
+    ax = axes[0, 1]
+    rate = st.groupby("burden")["ac_ind_max"].apply(lambda s: (s > 0).mean()).reindex(plot_order).dropna()
+    rate.plot(kind="bar", ax=ax, color="#4c72b0")
+    ax.set_ylabel("Share with any advanced course (ac_ind)")
+    ax.set_title("B. Ever took advanced/AP/CE-style course")
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=20, ha="right")
+
+    # C) GPA by burden (swapped with former advanced panel)
+    ax = axes[1, 0]
     sns.boxplot(
         data=st,
         x="burden",
@@ -522,19 +672,12 @@ def chart_q4_longrun(df: pd.DataFrame) -> None:
         palette="pastel",
         legend=False,
     )
-    ax.set_xlabel("Chronic burden across observed years")
+    ax.set_xlabel("Chronic burden (years chronically absent)")
     ax.set_ylabel("Last observed cumulative GPA")
-    ax.set_title("A. GPA distribution by chronic burden")
+    ax.set_title("C. GPA distribution by chronic burden")
     ax.tick_params(axis="x", rotation=20)
 
-    ax = axes[0, 1]
-    rate = st.groupby("burden")["ac_ind_max"].apply(lambda s: (s > 0).mean()).reindex(plot_order).dropna()
-    rate.plot(kind="bar", ax=ax, color="#4c72b0")
-    ax.set_ylabel("Share with any advanced course (ac_ind)")
-    ax.set_title("B. Ever took advanced/AP/CE-style course")
-    ax.set_xticklabels(ax.get_xticklabels(), rotation=20, ha="right")
-
-    ax = axes[1, 0]
+    ax = axes[1, 1]
     if (st["composite"] > 1).sum() > 50:
         st_act = st[st["composite"] > 1]
         ord_act = [b for b in order if b in st_act["burden"].values]
@@ -548,28 +691,16 @@ def chart_q4_longrun(df: pd.DataFrame) -> None:
             palette="muted",
             legend=False,
         )
-        ax.set_title("C. Best ACT composite (ACT takers)")
+        ax.set_xlabel("Chronic burden (years chronically absent)")
+        ax.set_title("D. Best ACT composite (ACT takers)")
+        ax.tick_params(axis="x", rotation=20)
     else:
         ax.set_visible(False)
-
-    ax = axes[1, 1]
-    sns.boxplot(
-        data=st,
-        x="burden",
-        y="school_count_max",
-        order=plot_order,
-        ax=ax,
-        hue="burden",
-        palette="Set2",
-        legend=False,
-    )
-    ax.set_title("D. School mobility (max school_count across years)")
-    ax.tick_params(axis="x", rotation=20)
 
     fig.suptitle(
         "Q4 — Long-term chronic absenteeism burden vs outcomes\n"
         "Graduation and credits are not in exploratory_data.csv; "
-        "AP/CE (ac_ind), ACT, extracurriculars, and mobility are proxies.",
+        "AP/CE (ac_ind) and ACT are proxies.",
         fontsize=10,
         y=1.02,
     )
@@ -595,6 +726,7 @@ def main() -> int:
     chart_q2_transitions(df)
     chart_q3_demographics(df)
     chart_q3_act_gap(df)
+    chart_q3_disability(df)
     chart_q4_longrun(df)
 
     print("Done.")
