@@ -35,6 +35,19 @@ ETHNICITY_DUMMY_COLUMNS = (
 )
 LATINX_INDICATOR_COLUMN = "ethnicity"
 
+# Good attendance: >170/180 of days attended, on a full 180-day membership year (percent scale 0–100)
+GOOD_ATTENDANCE_MEMBERSHIP = 180
+GOOD_ATTENDANCE_PCT_MIN = (170 / 180) * 100  # ~94.44; matches days_attended > 170 when membership = 180
+GOOD_ATTENDANCE_VLINE_LABEL = "Good attendance ref.: >170/180 days, membership 180"
+
+
+def _good_attendance_mask(d: pd.DataFrame) -> pd.Series:
+    """Rows meeting the good-attendance rule (percent and full membership year)."""
+    pct = d["percent_days_attended"]
+    sm = d["school_membership"]
+    return (pct > GOOD_ATTENDANCE_PCT_MIN) & (sm == GOOD_ATTENDANCE_MEMBERSHIP)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -75,7 +88,7 @@ def _prep(df: pd.DataFrame) -> pd.DataFrame:
 
     # Valid enrollment rows (avoid divide-by-zero artifacts from upstream fill rules)
     sm = out["school_membership"].fillna(0)
-    out["_valid_enroll"] = sm > 30
+    out["_valid_enroll"] = sm > 119
 
     out["_pct_absent"] = np.where(
         sm > 0, 100.0 * out["days_absent"].fillna(0) / sm, np.nan
@@ -170,7 +183,7 @@ def chart_q1_hinge(df: pd.DataFrame) -> None:
     for hi in hp:
         if hi + 1 < len(agg):
             ax.axvline(agg["mid_att"].iloc[hi + 1], color="crimson", linestyle="--", alpha=0.7)
-    ax.axvline(90, color="gray", linestyle=":", alpha=0.8, label="90% attendance (~10% absent)")
+    ax.axvline(GOOD_ATTENDANCE_PCT_MIN, color="gray", linestyle=":", alpha=0.8, label=GOOD_ATTENDANCE_VLINE_LABEL)
     ax.set_xlabel("Percent days attended (bin center)")
     ax.set_ylabel("Mean cumulative GPA")
     ax.set_title("A. Mean GPA by attendance (20 equal-width bins)")
@@ -192,7 +205,7 @@ def chart_q1_hinge(df: pd.DataFrame) -> None:
             .reset_index()
         )
         ax.plot(gagg["mid_att"], gagg["mean_gpa"], marker=".", label=f"Grade {g}")
-    ax.axvline(90, color="gray", linestyle=":", alpha=0.8)
+    ax.axvline(GOOD_ATTENDANCE_PCT_MIN, color="gray", linestyle=":", alpha=0.8)
     ax.set_xlabel("Percent days attended (bin center)")
     ax.set_ylabel("Mean GPA")
     ax.set_title("B. Mean GPA vs attendance by grade")
@@ -214,7 +227,7 @@ def chart_q1_hinge(df: pd.DataFrame) -> None:
                 .reset_index()
             )
             ax.plot(gagg["mid_att"], gagg["mean_gpa"], marker=".", label=gend)
-    ax.axvline(90, color="gray", linestyle=":", alpha=0.8)
+    ax.axvline(GOOD_ATTENDANCE_PCT_MIN, color="gray", linestyle=":", alpha=0.8)
     ax.set_xlabel("Percent days attended (bin center)")
     ax.set_ylabel("Mean GPA")
     ax.set_title("C. Mean GPA vs attendance by gender")
@@ -236,7 +249,7 @@ def chart_q1_hinge(df: pd.DataFrame) -> None:
                 .reset_index()
             )
             ax.plot(gagg["mid_att"], gagg["mean_gpa"], marker=".", label=eth_labels[eth])
-    ax.axvline(90, color="gray", linestyle=":", alpha=0.8)
+    ax.axvline(GOOD_ATTENDANCE_PCT_MIN, color="gray", linestyle=":", alpha=0.8)
     ax.set_xlabel("Percent days attended (bin center)")
     ax.set_ylabel("Mean GPA")
     ax.set_title("D. Mean GPA vs attendance by ethnicity (White and Latinx)")
@@ -244,12 +257,129 @@ def chart_q1_hinge(df: pd.DataFrame) -> None:
 
     fig.suptitle(
         "Q1 — Non-linear relationship between attendance and GPA (hinge ≈ steepest slope segment)\n"
-        "Red dashed line marks a data-driven elbow on the overall curve; gray line = 90% attendance (~10% absent).",
+        "Red dashed line marks a data-driven elbow on the overall curve; gray line = good attendance ref. (>170/180, membership 180).",
         fontsize=11,
         y=1.02,
     )
     fig.tight_layout()
     _save(fig, "eda_q1_attendance_gpa_hinge.png")
+
+
+def chart_q1_hinge_scatter(df: pd.DataFrame) -> None:
+    """Q1: student-level cumulative GPA vs percent attendance (scatter). Subsamples if very large."""
+    max_points = 1_000
+    per_series_cap = 1_000
+    d = _prep(df)
+    base = d[d["_valid_enroll"] & d["overall_gpa"].notna()].copy()
+    base = base[(base["percent_days_attended"] >= 50) & (base["percent_days_attended"] <= 100)]
+
+    sns.set_theme(style="whitegrid")
+    n_total = len(base)
+    plot_df = base
+    if n_total > max_points:
+        plot_df = base.sample(n=max_points, random_state=42)
+
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+
+    ax = axes[0, 0]
+    ax.scatter(
+        plot_df["percent_days_attended"],
+        plot_df["overall_gpa"],
+        s=6,
+        alpha=0.18,
+        color="#1f77b4",
+        edgecolors="none",
+        rasterized=True,
+    )
+    ax.axvline(GOOD_ATTENDANCE_PCT_MIN, color="gray", linestyle=":", alpha=0.8, label=GOOD_ATTENDANCE_VLINE_LABEL)
+    ax.set_xlabel("Percent days attended")
+    ax.set_ylabel("Cumulative GPA")
+    ax.set_title("A. Student-level GPA vs attendance")
+    ax.legend(loc="lower right", fontsize=8)
+    if n_total > max_points:
+        ax.text(
+            0.02,
+            0.98,
+            f"Random sample of {max_points:,} / {n_total:,} student-years",
+            transform=ax.transAxes,
+            fontsize=8,
+            verticalalignment="top",
+        )
+
+    ax = axes[0, 1]
+    grades = sorted(base["current_grade"].dropna().unique().astype(int).tolist())
+    grades = [g for g in grades if 1 <= g <= 12]
+    for g in grades[:8]:
+        sub = base[base["current_grade"] == g]
+        if len(sub) < 200:
+            continue
+        sub = sub if len(sub) <= per_series_cap else sub.sample(n=per_series_cap, random_state=42)
+        ax.scatter(
+            sub["percent_days_attended"],
+            sub["overall_gpa"],
+            s=5,
+            alpha=0.18,
+            label=f"Grade {g}",
+            rasterized=True,
+        )
+    ax.axvline(GOOD_ATTENDANCE_PCT_MIN, color="gray", linestyle=":", alpha=0.8)
+    ax.set_xlabel("Percent days attended")
+    ax.set_ylabel("Cumulative GPA")
+    ax.set_title("B. GPA vs attendance by grade")
+    ax.legend(title="Grade", fontsize=7, ncol=2)
+
+    ax = axes[1, 0]
+    if "gender" in base.columns:
+        gender_vals = base["gender"].astype(str).str.strip().str.upper()
+        for gend in ["M", "F"]:
+            sub = base[gender_vals == gend]
+            if len(sub) < 300:
+                continue
+            sub = sub if len(sub) <= per_series_cap else sub.sample(n=per_series_cap, random_state=42)
+            ax.scatter(
+                sub["percent_days_attended"],
+                sub["overall_gpa"],
+                s=5,
+                alpha=0.18,
+                label=gend,
+                rasterized=True,
+            )
+    ax.axvline(GOOD_ATTENDANCE_PCT_MIN, color="gray", linestyle=":", alpha=0.8)
+    ax.set_xlabel("Percent days attended")
+    ax.set_ylabel("Cumulative GPA")
+    ax.set_title("C. GPA vs attendance by gender")
+    ax.legend(fontsize=8)
+
+    ax = axes[1, 1]
+    if "ethnicity" in base.columns:
+        eth_labels = {"white": "White", "latinx": "Latinx"}
+        for eth in ["white", "latinx"]:
+            sub = base[base["ethnicity"] == eth]
+            if len(sub) < 50:
+                continue
+            sub = sub if len(sub) <= per_series_cap else sub.sample(n=per_series_cap, random_state=42)
+            ax.scatter(
+                sub["percent_days_attended"],
+                sub["overall_gpa"],
+                s=5,
+                alpha=0.18,
+                label=eth_labels[eth],
+                rasterized=True,
+            )
+    ax.axvline(GOOD_ATTENDANCE_PCT_MIN, color="gray", linestyle=":", alpha=0.8)
+    ax.set_xlabel("Percent days attended")
+    ax.set_ylabel("Cumulative GPA")
+    ax.set_title("D. GPA vs attendance by ethnicity (White and Latinx)")
+    ax.legend(fontsize=7)
+
+    fig.suptitle(
+        "Q1 — Student-level attendance vs cumulative GPA\n"
+        "Gray line = good attendance ref. (>170/180, membership 180). Hinge chart uses binned means in eda_q1_attendance_gpa_hinge.png.",
+        fontsize=11,
+        y=1.02,
+    )
+    fig.tight_layout()
+    _save(fig, "eda_q1_attendance_gpa_hinge_scatter.png")
 
 
 def chart_q1_act(df: pd.DataFrame) -> None:
@@ -276,7 +406,7 @@ def chart_q1_act(df: pd.DataFrame) -> None:
         .reset_index()
     )
     ax.plot(agg["mid_att"], agg["mean_act"], marker="o", color="#2ca02c")
-    ax.axvline(90, color="gray", linestyle=":", alpha=0.8)
+    ax.axvline(GOOD_ATTENDANCE_PCT_MIN, color="gray", linestyle=":", alpha=0.8)
     ax.set_xlabel("Percent days attended (bin center)")
     ax.set_ylabel("Mean ACT composite")
     ax.set_title("Q1 (supplement) — Mean ACT composite vs attendance (test-takers only)")
@@ -304,7 +434,7 @@ def chart_q2_transitions(df: pd.DataFrame) -> None:
     d = d.sort_values(["student_number", "year"])
 
     poor = d["percent_days_attended"] < 90
-    good = d["percent_days_attended"] >= 95
+    good = _good_attendance_mask(d)
 
     # First year meeting each condition per student
     first_poor = d.loc[poor].groupby("student_number")["year"].min()
@@ -433,7 +563,8 @@ def chart_q2_transitions(df: pd.DataFrame) -> None:
     ax.tick_params(axis="x", labelsize=8)
 
     fig.suptitle(
-        "Q2 — Students who moved from poor (<90%) to good (≥95%) attendance on different years\n",
+        "Q2 — Students who moved from poor (<90%) to good attendance on different years\n"
+        f"(good: % days >170/180 and school_membership={GOOD_ATTENDANCE_MEMBERSHIP})\n",
         y=1.05,
     )
     fig.tight_layout()
@@ -747,6 +878,7 @@ def main() -> int:
     print(f"Loaded {len(df):,} rows from {DATA_PATH}")
 
     chart_q1_hinge(df)
+    chart_q1_hinge_scatter(df)
     chart_q1_act(df)
     chart_q2_transitions(df)
     chart_q3_demographics(df)
