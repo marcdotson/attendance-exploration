@@ -179,10 +179,6 @@ def chart_q1_hinge(df: pd.DataFrame) -> None:
     )
     ax = axes[0, 0]
     ax.plot(agg["mid_att"], agg["mean_gpa"], marker="o", color="#1f77b4")
-    hp = _hinge_indices(agg["mid_att"].values, agg["mean_gpa"].values)
-    for hi in hp:
-        if hi + 1 < len(agg):
-            ax.axvline(agg["mid_att"].iloc[hi + 1], color="crimson", linestyle="--", alpha=0.7)
     ax.axvline(GOOD_ATTENDANCE_PCT_MIN, color="gray", linestyle=":", alpha=0.8, label=GOOD_ATTENDANCE_VLINE_LABEL)
     ax.set_xlabel("Percent days attended (bin center)")
     ax.set_ylabel("Mean cumulative GPA")
@@ -263,6 +259,232 @@ def chart_q1_hinge(df: pd.DataFrame) -> None:
     )
     fig.tight_layout()
     _save(fig, "eda_q1_attendance_gpa_hinge.png")
+
+
+def chart_q1_hinge_1pct_70plus(df: pd.DataFrame) -> None:
+    """Q1 variant: same hinge panels, but 1% attendance bins and attendance >= 70% only."""
+    d = _prep(df)
+    base = d[d["_valid_enroll"] & d["overall_gpa"].notna()].copy()
+    base = base[(base["percent_days_attended"] >= 70) & (base["percent_days_attended"] <= 100)]
+    if base.empty:
+        print("Skipping Q1 1%-bin hinge chart (no rows with percent_days_attended >= 70).")
+        return
+
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    sns.set_theme(style="whitegrid")
+
+    # A) Binned mean GPA vs attendance (1% fixed-width bins)
+    bins = np.arange(70, 101, 1)
+    base["att_bin"] = pd.cut(base["percent_days_attended"], bins=bins, include_lowest=True)
+    agg = (
+        base.groupby("att_bin", observed=True)
+        .agg(
+            mean_gpa=("overall_gpa", "mean"),
+            mid_att=("percent_days_attended", "mean"),
+            n=("student_number", "count"),
+        )
+        .reset_index()
+    )
+    ax = axes[0, 0]
+    ax.plot(agg["mid_att"], agg["mean_gpa"], marker="o", color="#1f77b4")
+    ax.axvline(
+        GOOD_ATTENDANCE_PCT_MIN,
+        color="gray",
+        linestyle=":",
+        alpha=0.8,
+        label=GOOD_ATTENDANCE_VLINE_LABEL,
+    )
+    ax.set_xlabel("Percent days attended (bin center)")
+    ax.set_ylabel("Mean cumulative GPA")
+    ax.set_title("A. Mean GPA by attendance (1%-width bins, >=70%)")
+    ax.legend(loc="lower right", fontsize=8)
+
+    # B) By grade (current_grade)
+    ax = axes[0, 1]
+    grades = sorted(base["current_grade"].dropna().unique().astype(int).tolist())
+    grades = [g for g in grades if 1 <= g <= 12]
+    for g in grades[:8]:
+        sub = base[base["current_grade"] == g]
+        if len(sub) < 200:
+            continue
+        sub = sub.copy()
+        sub["att_bin"] = pd.cut(sub["percent_days_attended"], bins=bins, include_lowest=True)
+        gagg = (
+            sub.groupby("att_bin", observed=True)
+            .agg(mean_gpa=("overall_gpa", "mean"), mid_att=("percent_days_attended", "mean"))
+            .reset_index()
+        )
+        ax.plot(gagg["mid_att"], gagg["mean_gpa"], marker=".", label=f"Grade {g}")
+    ax.axvline(GOOD_ATTENDANCE_PCT_MIN, color="gray", linestyle=":", alpha=0.8)
+    ax.set_xlabel("Percent days attended (bin center)")
+    ax.set_ylabel("Mean GPA")
+    ax.set_title("B. Mean GPA vs attendance by grade (>=70%)")
+    ax.legend(title="Grade", fontsize=7, ncol=2)
+
+    # C) Gender (if present)
+    ax = axes[1, 0]
+    if "gender" in base.columns:
+        gender_vals = base["gender"].astype(str).str.strip().str.upper()
+        for gend in ["M", "F"]:
+            sub = base[gender_vals == gend]
+            if len(sub) < 300:
+                continue
+            sub = sub.copy()
+            sub["att_bin"] = pd.cut(sub["percent_days_attended"], bins=bins, include_lowest=True)
+            gagg = (
+                sub.groupby("att_bin", observed=True)
+                .agg(mean_gpa=("overall_gpa", "mean"), mid_att=("percent_days_attended", "mean"))
+                .reset_index()
+            )
+            ax.plot(gagg["mid_att"], gagg["mean_gpa"], marker=".", label=gend)
+    ax.axvline(GOOD_ATTENDANCE_PCT_MIN, color="gray", linestyle=":", alpha=0.8)
+    ax.set_xlabel("Percent days attended (bin center)")
+    ax.set_ylabel("Mean GPA")
+    ax.set_title("C. Mean GPA vs attendance by gender (>=70%)")
+    ax.legend(fontsize=8)
+
+    # D) Ethnicity — White and Latinx only
+    ax = axes[1, 1]
+    if "ethnicity" in base.columns:
+        eth_labels = {"white": "White", "latinx": "Latinx"}
+        for eth in ["white", "latinx"]:
+            sub = base[base["ethnicity"] == eth]
+            if len(sub) < 300:
+                continue
+            sub = sub.copy()
+            sub["att_bin"] = pd.cut(sub["percent_days_attended"], bins=bins, include_lowest=True)
+            gagg = (
+                sub.groupby("att_bin", observed=True)
+                .agg(mean_gpa=("overall_gpa", "mean"), mid_att=("percent_days_attended", "mean"))
+                .reset_index()
+            )
+            ax.plot(gagg["mid_att"], gagg["mean_gpa"], marker=".", label=eth_labels[eth])
+    ax.axvline(GOOD_ATTENDANCE_PCT_MIN, color="gray", linestyle=":", alpha=0.8)
+    ax.set_xlabel("Percent days attended (bin center)")
+    ax.set_ylabel("Mean GPA")
+    ax.set_title("D. Mean GPA vs attendance by ethnicity (>=70%)")
+    ax.legend(fontsize=7)
+
+    fig.suptitle(
+        "Q1 (supplement) — Attendance vs cumulative GPA with 1% bins and attendance >= 70%\n"
+        "Gray line = good attendance ref. (>170/180, membership 180).",
+        fontsize=11,
+        y=1.02,
+    )
+    fig.tight_layout()
+    _save(fig, "eda_q1_attendance_gpa_hinge_1pct_70plus.png")
+
+
+def chart_q1_hinge_1pct_full_range(df: pd.DataFrame) -> None:
+    """Q1 variant: same hinge panels as 1% bins, attendance 0%–100% (no lower cutoff)."""
+    d = _prep(df)
+    base = d[d["_valid_enroll"] & d["overall_gpa"].notna()].copy()
+    base = base.dropna(subset=["percent_days_attended"])
+    base = base[(base["percent_days_attended"] >= 0) & (base["percent_days_attended"] <= 100)]
+    if base.empty:
+        print("Skipping Q1 1%-bin full-range hinge chart (no rows).")
+        return
+
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    sns.set_theme(style="whitegrid")
+
+    # Edges 0..101 so the last bin [100, 101) captures 100% attendance (closed on the right for that edge).
+    bins = np.arange(0, 102, 1)
+    base["att_bin"] = pd.cut(base["percent_days_attended"], bins=bins, include_lowest=True)
+    agg = (
+        base.groupby("att_bin", observed=True)
+        .agg(
+            mean_gpa=("overall_gpa", "mean"),
+            mid_att=("percent_days_attended", "mean"),
+            n=("student_number", "count"),
+        )
+        .reset_index()
+    )
+    ax = axes[0, 0]
+    ax.plot(agg["mid_att"], agg["mean_gpa"], marker="o", color="#1f77b4", markersize=3)
+    ax.axvline(
+        GOOD_ATTENDANCE_PCT_MIN,
+        color="gray",
+        linestyle=":",
+        alpha=0.8,
+        label=GOOD_ATTENDANCE_VLINE_LABEL,
+    )
+    ax.set_xlabel("Percent days attended (bin center)")
+    ax.set_ylabel("Mean cumulative GPA")
+    ax.set_title("A. Mean GPA by attendance (1%-width bins, 0–100%)")
+    ax.legend(loc="lower right", fontsize=8)
+
+    ax = axes[0, 1]
+    grades = sorted(base["current_grade"].dropna().unique().astype(int).tolist())
+    grades = [g for g in grades if 1 <= g <= 12]
+    for g in grades[:8]:
+        sub = base[base["current_grade"] == g]
+        if len(sub) < 200:
+            continue
+        sub = sub.copy()
+        sub["att_bin"] = pd.cut(sub["percent_days_attended"], bins=bins, include_lowest=True)
+        gagg = (
+            sub.groupby("att_bin", observed=True)
+            .agg(mean_gpa=("overall_gpa", "mean"), mid_att=("percent_days_attended", "mean"))
+            .reset_index()
+        )
+        ax.plot(gagg["mid_att"], gagg["mean_gpa"], marker=".", markersize=2, label=f"Grade {g}")
+    ax.axvline(GOOD_ATTENDANCE_PCT_MIN, color="gray", linestyle=":", alpha=0.8)
+    ax.set_xlabel("Percent days attended (bin center)")
+    ax.set_ylabel("Mean GPA")
+    ax.set_title("B. Mean GPA vs attendance by grade (0–100%)")
+    ax.legend(title="Grade", fontsize=7, ncol=2)
+
+    ax = axes[1, 0]
+    if "gender" in base.columns:
+        gender_vals = base["gender"].astype(str).str.strip().str.upper()
+        for gend in ["M", "F"]:
+            sub = base[gender_vals == gend]
+            if len(sub) < 300:
+                continue
+            sub = sub.copy()
+            sub["att_bin"] = pd.cut(sub["percent_days_attended"], bins=bins, include_lowest=True)
+            gagg = (
+                sub.groupby("att_bin", observed=True)
+                .agg(mean_gpa=("overall_gpa", "mean"), mid_att=("percent_days_attended", "mean"))
+                .reset_index()
+            )
+            ax.plot(gagg["mid_att"], gagg["mean_gpa"], marker=".", markersize=2, label=gend)
+    ax.axvline(GOOD_ATTENDANCE_PCT_MIN, color="gray", linestyle=":", alpha=0.8)
+    ax.set_xlabel("Percent days attended (bin center)")
+    ax.set_ylabel("Mean GPA")
+    ax.set_title("C. Mean GPA vs attendance by gender (0–100%)")
+    ax.legend(fontsize=8)
+
+    ax = axes[1, 1]
+    if "ethnicity" in base.columns:
+        eth_labels = {"white": "White", "latinx": "Latinx"}
+        for eth in ["white", "latinx"]:
+            sub = base[base["ethnicity"] == eth]
+            if len(sub) < 300:
+                continue
+            sub = sub.copy()
+            sub["att_bin"] = pd.cut(sub["percent_days_attended"], bins=bins, include_lowest=True)
+            gagg = (
+                sub.groupby("att_bin", observed=True)
+                .agg(mean_gpa=("overall_gpa", "mean"), mid_att=("percent_days_attended", "mean"))
+                .reset_index()
+            )
+            ax.plot(gagg["mid_att"], gagg["mean_gpa"], marker=".", markersize=2, label=eth_labels[eth])
+    ax.axvline(GOOD_ATTENDANCE_PCT_MIN, color="gray", linestyle=":", alpha=0.8)
+    ax.set_xlabel("Percent days attended (bin center)")
+    ax.set_ylabel("Mean GPA")
+    ax.set_title("D. Mean GPA vs attendance by ethnicity (0–100%)")
+    ax.legend(fontsize=7)
+
+    fig.suptitle(
+        "Q1 (supplement) — Attendance vs cumulative GPA with 1% bins (0%–100%)\n"
+        "Gray line = good attendance ref. (>170/180, membership 180).",
+        fontsize=11,
+        y=1.02,
+    )
+    fig.tight_layout()
+    _save(fig, "eda_q1_attendance_gpa_hinge_1pct_full_range.png")
 
 
 def chart_q1_hinge_scatter(df: pd.DataFrame) -> None:
@@ -412,6 +634,45 @@ def chart_q1_act(df: pd.DataFrame) -> None:
     ax.set_title("Q1 (supplement) — Mean ACT composite vs attendance (test-takers only)")
     fig.tight_layout()
     _save(fig, "eda_q1_attendance_act_hinge.png")
+
+
+def chart_q1_attendance_histogram(df: pd.DataFrame) -> None:
+    """Q1 supplement: count rows by 5-point percent_days_attended buckets."""
+    d = _prep(df)
+    base = d[d["_valid_enroll"]].copy()
+    base = base.dropna(subset=["percent_days_attended"])
+    base = base[(base["percent_days_attended"] >= 0) & (base["percent_days_attended"] <= 100)]
+    if base.empty:
+        print("Skipping Q1 attendance histogram (no valid percent_days_attended rows).")
+        return
+
+    # Fixed 5% buckets from 0 to 100.
+    bins = np.arange(0, 105, 5)
+    labels = [f"{i}-{i + 5}" for i in range(0, 100, 5)]
+    base["att_bucket"] = pd.cut(
+        base["percent_days_attended"],
+        bins=bins,
+        labels=labels,
+        include_lowest=True,
+        right=True,
+    )
+    counts = (
+        base.groupby("att_bucket", observed=True)
+        .size()
+        .reset_index(name="n")
+    )
+    if counts.empty:
+        print("Skipping Q1 attendance histogram (no rows after bucketing).")
+        return
+
+    fig, ax = plt.subplots(figsize=(11, 5))
+    sns.barplot(data=counts, x="att_bucket", y="n", color="#4c72b0", ax=ax)
+    ax.set_xlabel("Percent days attended bucket (5-point increments)")
+    ax.set_ylabel("Students (row count)")
+    ax.set_title("Q1 (supplement) — Student count by attendance bucket")
+    ax.tick_params(axis="x", rotation=45)
+    fig.tight_layout()
+    _save(fig, "eda_q1_attendance_pct_histogram_5pt.png")
 
 
 # ---------------------------------------------------------------------------
@@ -878,8 +1139,11 @@ def main() -> int:
     print(f"Loaded {len(df):,} rows from {DATA_PATH}")
 
     chart_q1_hinge(df)
+    chart_q1_hinge_1pct_70plus(df)
+    chart_q1_hinge_1pct_full_range(df)
     chart_q1_hinge_scatter(df)
     chart_q1_act(df)
+    chart_q1_attendance_histogram(df)
     chart_q2_transitions(df)
     chart_q3_demographics(df)
     chart_q3_act_gap(df)

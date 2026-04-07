@@ -425,8 +425,8 @@ for year in years:
         df_year['days_absent'] = df_year['school_membership'] - df_year['days_attended']
     
     # Update days_attended and school_membership to 180 if days_attended is > 180 or school_membership is > 180
-    df_year.loc[(df['days_attended'] > 180), 'days_attended'] = 180
-    df_year.loc[(df['school_membership'] > 180), 'school_membership'] = 180
+    df_year.loc[(df_year['days_attended'] > 180), 'days_attended'] = 180
+    df_year.loc[(df_year['school_membership'] > 180), 'school_membership'] = 180
 
     # Update school_membership to 180 if school_membership is < days_attended and days_attended is not 0
     df_year.loc[

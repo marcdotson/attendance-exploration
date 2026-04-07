@@ -77,7 +77,7 @@ for year in years:
     student_table = student_table.loc[student_table.groupby('student_number')['GradeLevel'].idxmax()].reset_index(drop=True)
 
     # Filter out students that are not in high school
-    student_table = student_table[student_table['GradeLevel'] > 8]
+    #student_table = student_table[student_table['GradeLevel'] > 8]
 
     ##########################################################################################################################################################
     # Add the processed tables to their respective dictionaries
