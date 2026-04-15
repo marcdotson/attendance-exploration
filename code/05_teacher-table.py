@@ -13,8 +13,10 @@
 # Files Exported:
 # - ./data/hs_teacher_data.csv
 # - ./data/ms_teacher_data.csv
+# - ./data/es_teacher_data.csv
 # - ./data/hs_post_covid_teacher_data.csv
 # - ./data/ms_post_covid_teacher_data.csv
+# - ./data/es_post_covid_teacher_data.csv
 
 # ----------------------------------
 # PART 2: Student-Teacher Exposure Grids
@@ -81,11 +83,14 @@ df = df.drop(columns=['CourseRecordID'])
 
 ######################################################################################################################################################
 # Filter and prep data
-# Create a list of secondary school numbers
-secondary_school_ids = [330, 406, 410, 710, 706, 705, 703, 702]
+# School ids by level
+middle_school_ids = [330, 406, 410]
+high_school_ids = [710, 706, 705, 703, 702]
+elementary_school_ids = [170, 166, 164, 160, 156, 152, 144, 140, 132, 130, 128, 124, 120, 118, 111, 109, 106]
+tracked_school_ids = high_school_ids + middle_school_ids + elementary_school_ids
 
-# Keep records for secondary schools only
-df = df[df['school_number'].isin(secondary_school_ids)]
+# Keep records only for schools we want in teacher-level outputs
+df = df[df['school_number'].isin(tracked_school_ids)]
 
 # Keep one row per teacher per school
 df = df.drop_duplicates(subset=['teacher_id', 'school_number'], keep='first')
@@ -102,7 +107,24 @@ school_name_map = {
     703: "Green Canyon",
     705: "Ridgeline",
     706: "Sky View",
-    710: "Cache High"
+    710: "Cache High",
+    170: "Wellesville Elem.",
+    166: "Sunrise Elem.",
+    164: "Summit Elem.",
+    160: "River Heights Elem.",
+    156: "Providence Elem.",
+    152: "White Pine Elem.",
+    144: "North Park Elem.",
+    140: "Nibley Elem.",
+    132: "Millville Elem.",
+    130: "Mountainside Elem.",
+    128: "Lincoln Elem.",
+    124: "Lewiston Elem.",
+    120: "Heritage Elem.",
+    118: "Greenville Elem.",
+    111: "Cedar Ridge Elem.",
+    109: "Canyon Elem.",
+    106: "Birch Creek Elem."
 }
 
 # Create a new column with school names from the map
@@ -111,19 +133,17 @@ df['school_name'] = df['school_number'].map(school_name_map)
 
 ######################################################################################################################################################
 # Split data by high school vs. middle school and by all years vs. post-covid years
-# List of middle and high school ids
-middle_school_ids = [330, 406, 410]
-high_school_ids = [710, 706, 705, 703, 702]
-
-# Create a dataframe to store high school and middle school data
+# Create dataframes by school level
 high_school = df[df['school_number'].isin(high_school_ids)]
 middle_school = df[df['school_number'].isin(middle_school_ids)]
+elementary_school = df[df['school_number'].isin(elementary_school_ids)]
 
-# Create a dataframe to store post-covid data for high school and middle school
+# Create dataframes for post-covid years (2022+) by school level
 years_temp = pd.Series(years)
 post_covid_years = years_temp[years_temp >= 2022].tolist()
 post_high = high_school[high_school['year'].isin(post_covid_years)]
 post_middle = middle_school[middle_school['year'].isin(post_covid_years)]
+post_elementary = elementary_school[elementary_school['year'].isin(post_covid_years)]
 
 
 ######################################################################################################################################################
@@ -132,22 +152,28 @@ post_middle = middle_school[middle_school['year'].isin(post_covid_years)]
 # All years
 high_school_grid = pd.crosstab(high_school['school_name'], high_school['teacher_id'])
 middle_school_grid = pd.crosstab(middle_school['school_name'], middle_school['teacher_id'])
+elementary_school_grid = pd.crosstab(elementary_school['school_name'], elementary_school['teacher_id'])
 
 # Post-covid years
 post_high_grid = pd.crosstab(post_high['school_name'], post_high['teacher_id'])
 post_middle_grid = pd.crosstab(post_middle['school_name'], post_middle['teacher_id'])
+post_elementary_grid = pd.crosstab(post_elementary['school_name'], post_elementary['teacher_id'])
 
 # Remove the index name from all grids
 high_school_grid.index.name = None
 middle_school_grid.index.name = None
+elementary_school_grid.index.name = None
 post_high_grid.index.name = None
 post_middle_grid.index.name = None
+post_elementary_grid.index.name = None
 
 # Rename columns: teacher_[teacher_id]
 high_school_grid.columns = [f'teacher_{int(c)}' for c in high_school_grid.columns]
 middle_school_grid.columns = [f'teacher_{int(c)}' for c in middle_school_grid.columns]
+elementary_school_grid.columns = [f'teacher_{int(c)}' for c in elementary_school_grid.columns]
 post_high_grid.columns = [f'teacher_{int(c)}' for c in post_high_grid.columns]
 post_middle_grid.columns = [f'teacher_{int(c)}' for c in post_middle_grid.columns]
+post_elementary_grid.columns = [f'teacher_{int(c)}' for c in post_elementary_grid.columns]
 
 # Number of Schools a Teacher Taught At
 #                                 |   1 School  |  >1 School  |  >2 Schools  |  >3 Schools  |  >4 Schools
@@ -345,6 +371,32 @@ all_teacher_grid = all_teacher_grid[cols]
 
 all_teacher_grid.head()
 
+# Grid: All teachers and students, split by school year
+all_teacher_by_year = all_teacher_data[['student_number', 'teacher_id', 'year']].copy()
+
+# Keep only teachers included in the cleaned teacher table
+all_teacher_by_year = all_teacher_by_year[all_teacher_by_year['teacher_id'].isin(teacher_data['teacher_id'])]
+
+# Ensure one row per student/teacher/year relationship before pivoting
+all_teacher_by_year = all_teacher_by_year.drop_duplicates(subset=['student_number', 'teacher_id', 'year'])
+all_teacher_by_year['had_teacher'] = 1
+
+all_teacher_grid_by_year = all_teacher_by_year.pivot_table(
+    index=['student_number', 'year'],
+    columns='teacher_id',
+    values='had_teacher',
+    aggfunc='max',
+    fill_value=0
+)
+
+# Rename the columns to make them more descriptive (i.e. teacher_[x])
+all_teacher_grid_by_year.columns = [f'teacher_{int(col)}' for col in all_teacher_grid_by_year.columns]
+
+# Reset index so student_number and year are columns
+all_teacher_grid_by_year = all_teacher_grid_by_year.reset_index()
+
+all_teacher_grid_by_year.head()
+
 #======================================================================================================================
 # Grid: Non-AC teachers and all students
 non_ac_teacher_data = teacher_data[teacher_data['teacher_ac_ind'] == 0]
@@ -440,13 +492,16 @@ school_grids['south_cache_middle_grid'].head()
 # ----------------------------------
 high_school_grid.to_csv('data/hs_teacher_data.csv')
 middle_school_grid.to_csv('data/ms_teacher_data.csv')
+elementary_school_grid.to_csv('data/es_teacher_data.csv')
 post_high_grid.to_csv('data/hs_post_covid_teacher_data.csv')
 post_middle_grid.to_csv('data/ms_post_covid_teacher_data.csv')
+post_elementary_grid.to_csv('data/es_post_covid_teacher_data.csv')
 
 # ----------------------------------
 # PART 2: Student–Teacher Exposure Grids
 # ----------------------------------
 all_teacher_grid.to_csv('./data/all_teacher_grid.csv', index=False)
+all_teacher_grid_by_year.to_csv('./data/all_teachers_grid_by_year.csv', index=False)
 non_ac_teacher_grid.to_csv('./data/non_ac_teacher_grid.csv', index=False)
 
 school_grids['sky_view_grid'].to_csv('./data/sky_view_non_ac_teacher_grid.csv', index=False)
