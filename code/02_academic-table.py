@@ -465,6 +465,7 @@ for year in years:
     else:
         # For years without detailed absence columns, absences are calculated as the difference between school_membership and days_attended
         df_year['days_absent'] = df_year['school_membership'] - df_year['days_attended']
+        df_year['days_absent'] = df_year['days_absent'].clip(lower=0)  # prevent negatives
     
     # Update days_attended and school_membership to 180 if days_attended is > 180 or school_membership is > 180
     df_year.loc[(df_year['days_attended'] > 180), 'days_attended'] = 180
@@ -596,6 +597,15 @@ df.loc[df['school_membership'] == 0, 'percent_days_attended'] = np.nan  # Avoid 
 # Round percent_days_attended to two decimal places
 df['percent_days_attended'] = pd.to_numeric(df['percent_days_attended'], errors='coerce')
 df['percent_days_attended'] = df['percent_days_attended'].round(2)
+
+print(df[['school_membership', 'days_absent']].describe())
+
+# Create chronic abseentism and good attendance columns
+#df['is_chronic_absent'] = ((df['school_membership'] > 60) & ((df['days_attended'] / df['school_membership'].replace(0, np.nan)) < 0.90)).astype(int)
+df['has_good_attendance'] = ((df['days_attended'] / df['school_membership'].replace(0, np.nan)) >= 0.95).astype(int)
+df['is_chronic_absent'] = (
+    ((df['percent_days_attended']) < 90) & (df['school_membership']> 60)
+).astype(int)
 
 df.head()
 
@@ -744,9 +754,12 @@ model_df = model_df.drop(columns=[col for col in model_columns_to_drop if col in
 # Prepare the data for export
 
 # Specify the column order for the df
-df_columns = ['student_number', 'ac_ind', 'ac_count', 'ac_gpa', 'dli_ind', 'dli_count', 'overall_gpa', 'days_attended', 'days_absent',
-            'school_membership', 'percent_days_attended', 'extracurricular_ind', 'extracurricular_count', 'current_grade',
-            'scram_membership', 'regular_percent', 'environment', 'extended_school_year', 'year']
+
+df_columns = ['student_number', 'ac_ind', 'ac_count', 'ac_gpa', 'dli_ind', 'dli_count', 'overall_gpa', 
+              'days_attended', 'days_absent', 'school_membership', 'percent_days_attended',
+              'is_chronic_absent', 'has_good_attendance',  
+              'extracurricular_ind', 'extracurricular_count', 'current_grade',
+              'scram_membership', 'regular_percent', 'environment', 'extended_school_year', 'year']
 
 df = df[df_columns]
 df = df.drop_duplicates(keep='first')
