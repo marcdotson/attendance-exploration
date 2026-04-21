@@ -849,7 +849,7 @@ def chart_q2_transitions(df: pd.DataFrame) -> None:
 
 
 def chart_q3_demographics(df: pd.DataFrame) -> None:
-    """Q3: one figure — chronic absenteeism rate by ethnicity, gender, and disability (panels A–C)."""
+    """Q3: Chronic Absenteeism by Demographics"""
     d = _prep(df)
     base = d[d["_valid_enroll"]].copy()
 
@@ -873,9 +873,10 @@ def chart_q3_demographics(df: pd.DataFrame) -> None:
     ax = axes[1]
     if "gender" in base.columns:
         gender_vals = base["gender"].astype(str).str.strip().str.upper()
+        gender_labels = {"M": "Male", "F": "Female"}
         grp = [g for g in ["M", "F"] if (gender_vals == g).any()]
         rates = [chronic_rate(base[gender_vals == g]) for g in grp]
-        ax.bar([str(g)[:18] for g in grp], rates, color="#c44e52")
+        ax.bar([gender_labels[g] for g in grp], rates, color="#c44e52")
         ax.set_ylabel("Share chronically absent")
         ax.set_title("B. Chronic absenteeism rate by gender")
         ax.tick_params(axis="x", rotation=20)
@@ -915,7 +916,7 @@ def chart_q3_demographics(df: pd.DataFrame) -> None:
         y=1.02,
     )
     fig.tight_layout()
-    _save(fig, "eda_q3_chronic_absenteeism_ethnicity_gender_disability.png")
+    _save(fig, "chronic_absenteeism_by_demographics.png")
 
 
 def chart_q3_act_gap(df: pd.DataFrame) -> None:
