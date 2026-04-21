@@ -1,5 +1,5 @@
 # Exploratory charts for attendance research questions.
-# Requires data/exploratory_data.csv from 07_combine_data-table.py (run after upstream table scripts).
+# Requires data/exploratory_data_all_grades.csv (run after upstream table scripts).
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import seaborn as sns
 from matplotlib.patches import Patch
 
 ROOT = Path(__file__).resolve().parent.parent
-DATA_PATH = ROOT / "data" / "exploratory_data.csv"
+DATA_PATH = ROOT / "data" / "exploratory_data_all_grades.csv"
 FIG_DIR = ROOT / "figures"
 
 # ACT scale (composite and section scores); invalid / placeholder values outside this range → NaN
@@ -46,6 +46,13 @@ def _good_attendance_mask(d: pd.DataFrame) -> pd.Series:
     pct = d["percent_days_attended"]
     sm = d["school_membership"]
     return (pct > GOOD_ATTENDANCE_PCT_MIN) & (sm == GOOD_ATTENDANCE_MEMBERSHIP)
+
+
+def _valid_gpa_mask(d: pd.DataFrame) -> pd.Series:
+    """Rows with usable GPA for GPA-based analyses."""
+    gpa = pd.to_numeric(d["overall_gpa"], errors="coerce")
+    grade = pd.to_numeric(d["current_grade"], errors="coerce")
+    return gpa.notna() & (gpa > 0) & (grade >= 7)
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +165,7 @@ def _save(fig: plt.Figure, name: str) -> None:
 
 def chart_q1_hinge(df: pd.DataFrame) -> None:
     d = _prep(df)
-    base = d[d["_valid_enroll"] & d["overall_gpa"].notna()].copy()
+    base = d[d["_valid_enroll"] & _valid_gpa_mask(d)].copy()
     base = base[(base["percent_days_attended"] >= 50) & (base["percent_days_attended"] <= 100)]
 
     fig, axes = plt.subplots(2, 2, figsize=(12, 10))
@@ -264,7 +271,7 @@ def chart_q1_hinge(df: pd.DataFrame) -> None:
 def chart_q1_hinge_1pct_70plus(df: pd.DataFrame) -> None:
     """Q1 variant: same hinge panels, but 1% attendance bins and attendance >= 70% only."""
     d = _prep(df)
-    base = d[d["_valid_enroll"] & d["overall_gpa"].notna()].copy()
+    base = d[d["_valid_enroll"] & _valid_gpa_mask(d)].copy()
     base = base[(base["percent_days_attended"] >= 70) & (base["percent_days_attended"] <= 100)]
     if base.empty:
         print("Skipping Q1 1%-bin hinge chart (no rows with percent_days_attended >= 70).")
@@ -378,7 +385,7 @@ def chart_q1_hinge_1pct_70plus(df: pd.DataFrame) -> None:
 def chart_q1_hinge_1pct_full_range(df: pd.DataFrame) -> None:
     """Q1 variant: same hinge panels as 1% bins, attendance 0%–100% (no lower cutoff)."""
     d = _prep(df)
-    base = d[d["_valid_enroll"] & d["overall_gpa"].notna()].copy()
+    base = d[d["_valid_enroll"] & _valid_gpa_mask(d)].copy()
     base = base.dropna(subset=["percent_days_attended"])
     base = base[(base["percent_days_attended"] >= 0) & (base["percent_days_attended"] <= 100)]
     if base.empty:
@@ -492,8 +499,8 @@ def chart_q1_hinge_scatter(df: pd.DataFrame) -> None:
     max_points = 1_000
     per_series_cap = 1_000
     d = _prep(df)
-    base = d[d["_valid_enroll"] & d["overall_gpa"].notna()].copy()
-    base = base[(base["percent_days_attended"] >= 50) & (base["percent_days_attended"] <= 100)]
+    base = d[d["_valid_enroll"] & _valid_gpa_mask(d)].copy()
+    base = base[(base["percent_days_attended"] >= 60) & (base["percent_days_attended"] <= 100)]
 
     sns.set_theme(style="whitegrid")
     n_total = len(base)
@@ -517,6 +524,7 @@ def chart_q1_hinge_scatter(df: pd.DataFrame) -> None:
     ax.set_xlabel("Percent days attended")
     ax.set_ylabel("Cumulative GPA")
     ax.set_title("A. Student-level GPA vs attendance")
+    ax.set_xlim(60, 100)
     ax.legend(loc="lower right", fontsize=8)
     if n_total > max_points:
         ax.text(
@@ -548,6 +556,7 @@ def chart_q1_hinge_scatter(df: pd.DataFrame) -> None:
     ax.set_xlabel("Percent days attended")
     ax.set_ylabel("Cumulative GPA")
     ax.set_title("B. GPA vs attendance by grade")
+    ax.set_xlim(60, 100)
     ax.legend(title="Grade", fontsize=7, ncol=2)
 
     ax = axes[1, 0]
@@ -570,6 +579,7 @@ def chart_q1_hinge_scatter(df: pd.DataFrame) -> None:
     ax.set_xlabel("Percent days attended")
     ax.set_ylabel("Cumulative GPA")
     ax.set_title("C. GPA vs attendance by gender")
+    ax.set_xlim(60, 100)
     ax.legend(fontsize=8)
 
     ax = axes[1, 1]
@@ -592,10 +602,11 @@ def chart_q1_hinge_scatter(df: pd.DataFrame) -> None:
     ax.set_xlabel("Percent days attended")
     ax.set_ylabel("Cumulative GPA")
     ax.set_title("D. GPA vs attendance by ethnicity (White and Latinx)")
+    ax.set_xlim(60, 100)
     ax.legend(fontsize=7)
 
     fig.suptitle(
-        "Q1 — Student-level attendance vs cumulative GPA\n"
+        "Q1 — Student-level attendance vs cumulative GPA (60–100%)\n"
         "Gray line = good attendance ref. (>170/180, membership 180). Hinge chart uses binned means in eda_q1_attendance_gpa_hinge.png.",
         fontsize=11,
         y=1.02,
@@ -838,90 +849,73 @@ def chart_q2_transitions(df: pd.DataFrame) -> None:
 
 
 def chart_q3_demographics(df: pd.DataFrame) -> None:
+    """Q3: one figure — chronic absenteeism rate by ethnicity, gender, and disability (panels A–C)."""
     d = _prep(df)
     base = d[d["_valid_enroll"]].copy()
 
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-
     def chronic_rate(sub: pd.DataFrame) -> float:
-        return sub["_chronic"].mean() if len(sub) else np.nan
+        return float(sub["_chronic"].mean()) if len(sub) else float("nan")
+
+    fig, axes = plt.subplots(1, 3, figsize=(14, 5))
 
     # A) Chronic rate by ethnicity
-    ax = axes[0, 0]
+    ax = axes[0]
     if "ethnicity" in base.columns:
         eth = base["ethnicity"].value_counts().head(8).index
         rates = [chronic_rate(base[base["ethnicity"] == e]) for e in eth]
         ax.barh([str(e)[:22] for e in eth], rates, color="#4c72b0")
-        ax.set_xlabel("Share chronically absent (≥10% days missed)")
-        ax.set_title("A. Chronic absence rate by ethnicity (top groups)")
+        ax.set_xlabel("Share chronically absent")
+        ax.set_title("A. Chronic absenteeism rate by ethnicity")
     else:
         ax.set_visible(False)
 
     # B) Chronic rate by gender
-    ax = axes[0, 1]
+    ax = axes[1]
     if "gender" in base.columns:
         gender_vals = base["gender"].astype(str).str.strip().str.upper()
         grp = [g for g in ["M", "F"] if (gender_vals == g).any()]
         rates = [chronic_rate(base[gender_vals == g]) for g in grp]
         ax.bar([str(g)[:18] for g in grp], rates, color="#c44e52")
-        ax.set_xlabel("Share chronically absent")
-        ax.set_title("B. Chronic rate by gender")
+        ax.set_ylabel("Share chronically absent")
+        ax.set_title("B. Chronic absenteeism rate by gender")
         ax.tick_params(axis="x", rotation=20)
     else:
         ax.set_visible(False)
 
-    # C) GPA gap by ethnicity: non-chronic mean minus chronic mean
-    ax = axes[1, 0]
-    if "ethnicity" in base.columns:
-        eth = base["ethnicity"].value_counts().head(6).index
-        labels = []
-        gaps = []
-        for e in eth:
-            sub = base[base["ethnicity"] == e]
-            mean_nc = sub.loc[~sub["_chronic"], "overall_gpa"].mean()
-            mean_ch = sub.loc[sub["_chronic"], "overall_gpa"].mean()
-            gap = mean_nc - mean_ch
-            if pd.notna(gap):
-                labels.append(str(e)[:12])
-                gaps.append(gap)
-        ax.bar(labels, gaps, color="#4c72b0")
-        ax.axhline(0, color="gray", linestyle=":", alpha=0.8)
-        ax.set_ylabel("GPA gap (non-chronic − chronic)")
-        ax.set_title("C. Mean GPA gap by ethnicity")
-        ax.tick_params(axis="x", rotation=25)
+    # C) Chronic rate by disability status
+    ax = axes[2]
+    if "scram_membership" in base.columns:
+        base = base.copy()
+        base["_disability_group"] = np.where(
+            base["scram_membership"].fillna(0) > 0,
+            "Disability",
+            "No disability",
+        )
+        order = ["No disability", "Disability"]
+        chronic_rates = (
+            base.groupby("_disability_group", observed=True)["_chronic"]
+            .mean()
+            .reindex(order)
+            .dropna()
+        )
+        if not chronic_rates.empty:
+            ax.bar(chronic_rates.index.astype(str), chronic_rates.values, color=["#4c72b0", "#c44e52"])
+            ax.set_ylabel("Share chronically absent")
+            ax.set_title("C. Chronic absenteeism rate by disability status")
+            ax.tick_params(axis="x", rotation=15)
+        else:
+            ax.set_visible(False)
     else:
-        ax.set_visible(False)
-
-    # D) GPA gap by gender: non-chronic mean minus chronic mean
-    ax = axes[1, 1]
-    if "gender" in base.columns:
-        gender_vals = base["gender"].astype(str).str.strip().str.upper()
-        grp = [g for g in ["M", "F"] if (gender_vals == g).any()]
-        labels = []
-        gaps = []
-        for g in grp:
-            sub = base[gender_vals == g]
-            mean_nc = sub.loc[~sub["_chronic"], "overall_gpa"].mean()
-            mean_ch = sub.loc[sub["_chronic"], "overall_gpa"].mean()
-            gap = mean_nc - mean_ch
-            if pd.notna(gap):
-                labels.append(g)
-                gaps.append(gap)
-        ax.bar(labels, gaps, color="#55a868")
-        ax.axhline(0, color="gray", linestyle=":", alpha=0.8)
-        ax.set_ylabel("GPA gap (non-chronic − chronic)")
-        ax.set_title("D. Mean GPA gap by gender")
-    else:
-        ax.set_visible(False)
+        ax.text(0.5, 0.5, "Missing scram_membership", ha="center", va="center", transform=ax.transAxes)
+        ax.set_axis_off()
 
     fig.suptitle(
-        "Q3 — Who is most impacted by chronic absence, and is GPA impact similar?\n"
-        "Chronic = ≥10% of enrolled days missed.",
+        "Q3 — Chronic absenteeism by demographics",
         fontsize=11,
         y=1.02,
     )
     fig.tight_layout()
-    _save(fig, "eda_q3_demographics_chronic_gpa.png")
+    _save(fig, "eda_q3_chronic_absenteeism_ethnicity_gender_disability.png")
 
 
 def chart_q3_act_gap(df: pd.DataFrame) -> None:
@@ -977,6 +971,7 @@ def chart_q3_disability(df: pd.DataFrame) -> None:
         "Disability (scram_membership > 0)",
         "No disability (scram_membership <= 0)",
     )
+    base_gpa = base[_valid_gpa_mask(base)].copy()
 
     order = [
         "No disability (scram_membership <= 0)",
@@ -1000,7 +995,7 @@ def chart_q3_disability(df: pd.DataFrame) -> None:
     labels: list[str] = []
     gaps: list[float] = []
     for grp in order:
-        sub = base[base["_disability_group"] == grp]
+        sub = base_gpa[base_gpa["_disability_group"] == grp]
         if sub.empty:
             continue
         mean_nc = sub.loc[~sub["_chronic"], "overall_gpa"].mean()
@@ -1046,6 +1041,8 @@ def chart_q4_longrun(df: pd.DataFrame) -> None:
     last_obs = d.sort_values(["student_number", "year"]).groupby("student_number", sort=False).last()
     st = by_stu.copy()
     st["gpa_last"] = last_obs["overall_gpa"]
+    st["gpa_last"] = pd.to_numeric(st["gpa_last"], errors="coerce")
+    st.loc[st["gpa_last"] <= 0, "gpa_last"] = np.nan
     st["composite"] = last_obs["composite_score"]
 
     # Burden = count of chronic years per student (one row per student in st)
@@ -1116,7 +1113,7 @@ def chart_q4_longrun(df: pd.DataFrame) -> None:
 
     fig.suptitle(
         "Q4 — Long-term chronic absenteeism burden vs outcomes\n"
-        "Graduation and credits are not in exploratory_data.csv; "
+        "Graduation and credits are not in exploratory_data_all_grades.csv; "
         "AP/CE (ac_ind) and ACT are proxies.",
         fontsize=10,
         y=1.02,
@@ -1132,7 +1129,10 @@ def chart_q4_longrun(df: pd.DataFrame) -> None:
 
 def main() -> int:
     if not DATA_PATH.is_file():
-        print(f"Missing {DATA_PATH}. Run upstream table scripts and 07_combine_data-table.py first.", file=sys.stderr)
+        print(
+            f"Missing {DATA_PATH}. Run upstream table scripts and the all-grades combine step first.",
+            file=sys.stderr,
+        )
         return 1
 
     df = pd.read_csv(DATA_PATH, low_memory=False)
@@ -1146,8 +1146,9 @@ def main() -> int:
     chart_q1_attendance_histogram(df)
     chart_q2_transitions(df)
     chart_q3_demographics(df)
-    chart_q3_act_gap(df)
-    chart_q3_disability(df)
+    # Q3 other figures temporarily disabled (combined chronic-only chart above).
+    # chart_q3_act_gap(df)
+    # chart_q3_disability(df)
     chart_q4_longrun(df)
 
     print("Done.")
