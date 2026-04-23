@@ -272,6 +272,42 @@ for year in years:
 
 
     ######################################################################################################################################################
+    # Build a middle school GPA from Course Membership when transcript GPA is missing.
+    # Middle school schools are SchoolNumber values between 300 and 399 (inclusive).
+    # Only numeric GradeEarned values are included.
+    middle_school_grades = membership[['student_number', 'SchoolNumber', 'GradeEarned']].copy()
+    middle_school_grades['student_number'] = middle_school_grades['student_number'].astype(str)
+    middle_school_grades['school_number_numeric'] = pd.to_numeric(middle_school_grades['SchoolNumber'], errors='coerce')
+    middle_school_grades = middle_school_grades[
+        middle_school_grades['school_number_numeric'].between(300, 499, inclusive='both')
+    ]
+    middle_school_grades['GradeEarned'] = pd.to_numeric(
+        middle_school_grades['GradeEarned'].astype(str).str.strip(),
+        errors='coerce'
+    )
+    middle_school_grades = middle_school_grades.dropna(subset=['GradeEarned'])
+
+    # Exclude students that already have transcript GPA in Student table.
+    transcript_gpa_status = student_table[['student_number', 'CumulativeGPA']].copy()
+    transcript_gpa_status['student_number'] = transcript_gpa_status['student_number'].astype(str)
+    transcript_gpa_status['CumulativeGPA'] = pd.to_numeric(transcript_gpa_status['CumulativeGPA'], errors='coerce')
+    students_without_transcript_gpa = transcript_gpa_status[
+        transcript_gpa_status['CumulativeGPA'].isna() | (transcript_gpa_status['CumulativeGPA'] <= 0)
+    ]['student_number'].drop_duplicates()
+    middle_school_grades = middle_school_grades[
+        middle_school_grades['student_number'].isin(students_without_transcript_gpa)
+    ]
+
+    middle_school_gpa = middle_school_grades.groupby('student_number', as_index=False)['GradeEarned'].mean()
+    middle_school_gpa = middle_school_gpa.rename(columns={'GradeEarned': 'middle_school_gpa'})
+    middle_school_gpa['middle_school_gpa'] = middle_school_gpa['middle_school_gpa'].astype(float).round(3)
+
+    # Merge the derived middle school GPA for later fallback into overall_gpa.
+    df = pd.merge(df, middle_school_gpa, on='student_number', how='left')
+    model_df = pd.merge(model_df, middle_school_gpa, on='student_number', how='left')
+
+
+    ######################################################################################################################################################
     # Call the function above to process the numeric columns
     # Columns to process from the student_table
     columns_to_process = ['GradeLevel', 'DaysAttended', 'SchoolMembership', 'CumulativeGPA', 'ExcusedAbsences', 'UnexcusedAbsences', 'AbsencesDueToSuspension']
@@ -294,6 +330,12 @@ for year in years:
 
     # Call the function with filtered columns and rename map
     model_df, df = process_numeric_student_columns(student_table, model_df, df, existing_columns, existing_rename_map)
+
+    # Fill transcript GPA gaps with derived middle school GPA.
+    df['overall_gpa'] = pd.to_numeric(df['overall_gpa'], errors='coerce')
+    model_df['overall_gpa'] = pd.to_numeric(model_df['overall_gpa'], errors='coerce')
+    df['overall_gpa'] = df['overall_gpa'].fillna(df['middle_school_gpa'])
+    model_df['overall_gpa'] = model_df['overall_gpa'].fillna(model_df['middle_school_gpa'])
 
     ######################################################################################################################################################
     # Add the scram data to df and model_df
