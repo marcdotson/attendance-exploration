@@ -556,14 +556,11 @@ df.loc[df['school_membership'] == 0, 'percent_days_attended'] = np.nan  # Avoid 
 df['percent_days_attended'] = pd.to_numeric(df['percent_days_attended'], errors='coerce')
 df['percent_days_attended'] = df['percent_days_attended'].round(2)
 
-print(df[['school_membership', 'days_absent']].describe())
 
 # Create chronic abseentism and good attendance columns
 #df['is_chronic_absent'] = ((df['school_membership'] > 60) & ((df['days_attended'] / df['school_membership'].replace(0, np.nan)) < 0.90)).astype(int)
 df['has_good_attendance'] = ((df['days_attended'] / df['school_membership'].replace(0, np.nan)) >= 0.95).astype(int)
-df['is_chronic_absent'] = (
-    ((df['percent_days_attended']) < 90) & (df['school_membership']> 60)
-).astype(int)
+df['is_chronic_absent'] = (((df['percent_days_attended']) < 90) & (df['school_membership']> 60)).astype(int)
 
 df.head()
 
