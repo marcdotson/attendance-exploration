@@ -9,7 +9,8 @@ years = [2017, 2018, 2022, 2023, 2024, 2025]
 membership_columns = {'StudentNumber': 'int32', 'SchoolNumber': 'int16'}
 date = ['CourseEntryDate']
 
-# Load the pickled data (student_tables)
+# Load the pickled data (student_tables) — Student sheet: roster/grade, no school (school comes
+# from Course Membership below).
 with open('./data/student_data.pkl', 'rb') as f:
     student_tables = pickle.load(f)
 
@@ -40,7 +41,7 @@ for year in years:
     student_table_year['year'] = student_table_year['year'].astype(int)
     membership_year['year'] = membership_year['year'].astype(int)
 
-    # Append year-specific data to the respective lists
+    # Roster: one row per student per year (school is not on the Student sheet in the pickle)
     all_membership.append(membership_year)
     all_student_tables.append(student_table_year[['student_number', 'year']])
 
@@ -49,7 +50,6 @@ for year in years:
 # Concatenate and clean the DataFrames for each dataset across all years
 membership = pd.concat(all_membership, ignore_index=True)
 student_table = pd.concat(all_student_tables, ignore_index=True)
-student_current_school = pd.concat(all_student_tables, ignore_index=True) # I will use this to create the df
 
 # Rename column names in membership table
 membership = membership.rename(columns={'StudentNumber': 'student_number', 'SchoolNumber': 'school_number'})
@@ -58,13 +58,10 @@ membership = membership.rename(columns={'StudentNumber': 'student_number', 'Scho
 membership = membership.drop_duplicates(keep='first')
 student_table = student_table.drop_duplicates(keep='first')
 
-# I want to keep one student_number per year so we can track students current_school
-student_current_school = student_current_school.drop_duplicates(subset=['student_number', 'year'], keep='first')
-
-# Create the df from the student_table and student_current_school student_numbers
-# - df: exploratory data (created from the student_current_school)
-# - model_df: model data (created from student_table)
-df = student_current_school[['student_number', 'year']].copy()
+# Exploratory student-year index from roster. School per year is resolved from Course Membership
+# later (see merge into current_schools and _pick_one_membership_row).
+# - model_df: model data (one student_number column from roster rows, then merged)
+df = student_table[['student_number', 'year']].copy()
 model_df = student_table['student_number'].copy()
 
 # Merge model_df and the membership table
@@ -110,6 +107,15 @@ school_name_map = {
     120: "Heritage Elem.", 118: "Greenville Elem.", 111: "Cedar Ridge Elem.", 109: "Canyon Elem.", 106: "Birch Creek Elem."
 }
 
+# Level buckets (align with school_name_map). Used to pick one school when Course Membership has
+# multiple SchoolNumbers in the same year (e.g. 6th grader with courses at both elem. and middle).
+# Canonical elementary school numbers (aligned with school_name_map)
+elementary_school_ids = {
+    170, 166, 164, 160, 156, 152, 144, 140, 132, 130, 128, 124, 120, 118, 111, 109, 106,
+}
+middle_school_ids = [330, 406, 410]
+high_school_ids = [710, 706, 705, 703, 702]
+
 # Function to map school number to school name, handling unknowns and zeros
 def map_school_name(x):
     # If school number is 0, return "None"
@@ -120,12 +126,57 @@ def map_school_name(x):
     return school_name_map.get(x, "Other")
 
 
+# Per-year grade (roster) — used to resolve multiple Course Membership rows (same student, same year)
+grade_rows = []
+for _y in years:
+    _g = student_tables[_y][["student_number", "GradeLevel"]].copy()
+    _g = _g.rename(columns={"GradeLevel": "current_grade"})
+    _g["year"] = _y
+    _g["current_grade"] = pd.to_numeric(_g["current_grade"], errors="coerce")
+    _g = _g.drop_duplicates(subset=["student_number", "year"], keep="first")
+    grade_rows.append(_g)
+grades_long = pd.concat(grade_rows, ignore_index=True)
+
+
+def _pick_one_membership_row(gdf: pd.DataFrame) -> pd.Series:
+    """One membership row per (student_number, year). If the EOY file lists multiple school_numbers
+    for the same year, keep the one that matches roster grade: K-6 -> elementary, 7-8 -> middle,
+    9-12 -> high; otherwise fall back to the latest CourseEntryDate. Without this, drop_duplicates
+    (keep='first') picked an arbitrary row, often middle school for 6th graders in dual-list cases.
+    """
+    if len(gdf) == 1:
+        return gdf.iloc[0]
+    g = gdf["current_grade"].iloc[0]
+    if pd.isna(g):
+        return gdf.iloc[0]
+    gi = int(g)
+    if 0 <= gi <= 6:
+        sub = gdf[gdf["school_number"].isin(elementary_school_ids)]
+    elif 7 <= gi <= 8:
+        sub = gdf[gdf["school_number"].isin(middle_school_ids)]
+    elif 9 <= gi <= 12:
+        sub = gdf[gdf["school_number"].isin(high_school_ids)]
+    else:
+        sub = gdf.iloc[0:0]
+    if not sub.empty:
+        gdf = sub
+    return gdf.sort_values("CourseEntryDate", ascending=False, na_position="last").iloc[0]
+
+
 ######################################################################################################################################################
 # Create columns current_school, schools_attended, and school_count for the df
 df = df.drop_duplicates()
 
-# Merge df with membership to get school info
+# Merge df with membership to get school info (can be >1 row per student-year)
 current_schools = pd.merge(df, membership, on=['student_number', 'year'], how='left')
+current_schools = pd.merge(current_schools, grades_long, on=['student_number', 'year'], how='left')
+
+current_schools = pd.DataFrame(
+    [
+        _pick_one_membership_row(g)
+        for _, g in current_schools.groupby(["student_number", "year"], sort=False)
+    ]
+).reset_index(drop=True)
 
 # Sort to keep the most recent year per student
 current_schools = current_schools.sort_values(by=['year'], ascending=False)
@@ -133,20 +184,54 @@ current_schools = current_schools.sort_values(by=['year'], ascending=False)
 # Rename for clarity
 current_schools = current_schools.rename(columns={'school_number': 'current_school'})
 
-# Drop duplicates to keep the most recent school per student per year
-current_schools = current_schools.drop_duplicates(subset=['student_number', 'year'])
-
 # Fill null current_school values with 0
 current_schools['current_school'] = current_schools['current_school'].fillna(0)
 
 # Apply the school name mapping to the current_school column
 current_schools['current_school'] = current_schools['current_school'].apply(map_school_name)
 
-# Create a new DataFrame to track schools_attended and school_count
-school_history = current_schools.copy()
+# All distinct school names seen for this student (membership years) — used to impute null current_school
+student_school_list = (
+    current_schools.groupby("student_number", as_index=False)["current_school"]
+    .agg(_all_schools=lambda s: sorted(pd.Series(s).dropna().unique().tolist()))
+)
+current_schools = pd.merge(current_schools, student_school_list, on="student_number", how="left")
+
+# Roster grade already on current_schools from the membership resolution merge
+
+for idx in current_schools.index:
+    cs = current_schools.at[idx, "current_school"]
+    if cs != "None":
+        continue
+    slist = current_schools.at[idx, "_all_schools"]
+    names = [str(x).strip() for x in slist if str(x).strip() and str(x).strip().lower() != "none"]
+    if not names:
+        continue
+    g = current_schools.at[idx, "current_grade"]
+    if pd.isna(g):
+        continue
+    g = int(g)
+    picked = None
+    if 0 <= g <= 6:
+        cands = [n for n in names if "elem." in n.lower()]
+        if cands:
+            picked = min(cands)
+    elif 7 <= g <= 8:
+        cands = [n for n in names if "middle" in n.lower()]
+        if cands:
+            picked = min(cands)
+    elif 9 <= g <= 12:
+        cands = [n for n in names if "elem." not in n.lower() and "middle" not in n.lower()]
+        if cands:
+            picked = min(cands)
+    if picked is not None:
+        current_schools.at[idx, "current_school"] = picked
+
+current_schools = current_schools.drop(columns=["_all_schools", "current_grade"])
+
+# DataFrame: schools_attended and school_count (from imputed current_school)
 school_history = (
-    current_schools
-    .groupby('student_number')['current_school']
+    current_schools.groupby("student_number")["current_school"]
     .agg(schools_attended=lambda x: sorted(x.unique()))
     .reset_index()
 )
@@ -171,11 +256,8 @@ df.head()
 
 ######################################################################################################################################################
 # Create two new columns: high_school and middle_school for the model_df
-# - Both are assigned based on the most recent school a student attended 
-
-# List of all middle and high school ids
-middle_school_ids = [330, 406, 410]
-high_school_ids = [710, 706, 705, 703, 702]
+# - Both are assigned based on the most recent school a student attended
+# (middle_school_ids / high_school_ids are defined with school_name_map)
 
 middle_schools = membership.copy()
 

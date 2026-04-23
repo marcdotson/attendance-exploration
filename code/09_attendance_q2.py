@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import sys
 from pathlib import Path
 
@@ -27,12 +26,6 @@ def save_fig(fig: plt.Figure, name: str) -> None:
     fig.savefig(out, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"Wrote {out}")
-
-
-def school_slug(name: object) -> str:
-    s = re.sub(r"[^\w\-]+", "_", str(name).strip().strip('"'), flags=re.UNICODE)
-    s = re.sub(r"_+", "_", s).strip("_")[:80]
-    return s or "unknown"
 
 
 def main() -> None:
@@ -197,7 +190,7 @@ def main() -> None:
         group_counts = group_counts.sort_values("school_group")
         fig, ax = plt.subplots(figsize=(8, 5))
         sns.barplot(data=group_counts, x="school_group", y="n", color="#55a868", ax=ax)
-        ax.set_xlabel("School Group (at Last Poor-Attending Year)")
+        ax.set_xlabel("School Group (Year Before Improvement)")
         ax.set_ylabel("Improvers / All Poor Attenders")
         ax.set_title(
             "Percentage of Improvers by School Group"
@@ -236,7 +229,7 @@ def main() -> None:
     if not improver_school_counts.empty:
         fig, ax = plt.subplots(figsize=(max(10.0, 0.35 * len(improver_school_counts)), 5))
         sns.barplot(data=improver_school_counts, x="current_school", y="n", color="#4c72b0", ax=ax)
-        ax.set_xlabel("School (at Last Poor-Attending Year)")
+        ax.set_xlabel("School (Year Before Improvement)")
         ax.set_ylabel("Total Students")
         ax.set_title(
             "Improvers by School"
@@ -342,7 +335,7 @@ def main() -> None:
         if not grade_counts.empty:
             fig, ax = plt.subplots(figsize=(9, 5))
             sns.barplot(data=grade_counts, x="grade", y="n", color="#8172b3", ax=ax)
-            ax.set_xlabel("Grade (at Last Poor-Attending Year)")
+            ax.set_xlabel("Grade (Year Before Improvement)")
             ax.set_ylabel("Improvers / All Poor Attenders")
             ax.set_title("Percentage of Improvers by Grade")
             fig.tight_layout()
@@ -363,7 +356,7 @@ def main() -> None:
         if not school_counts.empty:
             fig, ax = plt.subplots(figsize=(max(10.0, 0.38 * len(school_counts)), 5))
             sns.barplot(data=school_counts, x="current_school", y="n", color="#4c72b0", ax=ax)
-            ax.set_xlabel("School (at Last Poor-Attending Year)")
+            ax.set_xlabel("School (Year Before Improvement)")
             ax.set_ylabel("Improvers / All Poor Attenders")
             ax.set_title("Percentage of Improvers by School")
             plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
@@ -372,28 +365,6 @@ def main() -> None:
                 fig,
                 "percentage_of_improvers_by_school.png",
             )
-
-    # Appendix: attendance averages for each elementary school by grade.
-    # elementary = df[df["current_school"].str.lower().str.contains("elem.")].copy()
-    # for school in sorted(elementary["current_school"].unique()):
-    #     sub = elementary[elementary["current_school"] == school].copy()
-    #     sub = sub[(sub[grade_col] >= 0) & (sub[grade_col] <= 6)]
-    #     agg = (
-    #         sub.groupby(grade_col, as_index=False)["percent_days_attended"]
-    #         .mean()
-    #         .rename(columns={grade_col: "grade", "percent_days_attended": "mean_pct"})
-    #         .sort_values("grade")
-    #     )
-    #     if agg.empty:
-    #         continue
-    #     fig, ax = plt.subplots(figsize=(8, 5))
-    #     sns.barplot(data=agg, x="grade", y="mean_pct", color="#4c72b0", ax=ax)
-    #     ax.set_xlabel("Grade")
-    #     ax.set_ylabel("Mean % days attended")
-    #     ax.set_title(f"Mean attendance by grade — elementary school: {school}")
-    #     ax.set_ylim(0, 105)
-    #     fig.tight_layout()
-    #     save_fig(fig, f"eda_q2_mean_pct_by_grade_elementary_{school_slug(school)}.png")
 
 if __name__ == "__main__":
     main()
