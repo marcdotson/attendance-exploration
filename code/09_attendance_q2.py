@@ -220,9 +220,6 @@ def main() -> None:
         save_fig(fig, "improvers_count_by_first_good_attendance_grade.png")
 
     # Chart 5: Improvers count by school (all schools).
-<<<<<<< HEAD
-   
-=======
     improver_school_counts = (
         first_poor_details.groupby("current_school", as_index=False)
         .size()
@@ -240,7 +237,6 @@ def main() -> None:
         plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
         fig.tight_layout()
         save_fig(fig, "improvers_count_by_school.png")
->>>>>>> 7a74ff303d5c37302619da97aeae0c8e1faf7a1c
 
     # Chart 6: Teacher count before one-year poor->good transition.
     if TEACHER_GRID_BY_YEAR_PATH.is_file() and not one_year_transitions.empty:
