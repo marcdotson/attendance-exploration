@@ -227,23 +227,7 @@ def main() -> None:
         save_fig(fig, "improvers_count_by_first_good_attendance_grade.png")
 
     # Chart 5: Improvers count by school (all schools).
-    improver_school_counts = (
-        first_poor_details.groupby("current_school", as_index=False)
-        .size()
-        .rename(columns={"size": "n"})
-        .sort_values("n", ascending=False)
-    )
-    if not improver_school_counts.empty:
-        fig, ax = plt.subplots(figsize=(max(10.0, 0.35 * len(improver_school_counts)), 5))
-        sns.barplot(data=improver_school_counts, x="current_school", y="n", color="#4c72b0", ax=ax)
-        ax.set_xlabel("School (at Last Poor-Attending Year)")
-        ax.set_ylabel("Total Students")
-        ax.set_title(
-            "Improvers by School"
-        )
-        plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
-        fig.tight_layout()
-        save_fig(fig, "improvers_count_by_school.png")
+   
 
     # Chart 6: Teacher count before one-year poor->good transition.
     if TEACHER_GRID_BY_YEAR_PATH.is_file() and not one_year_transitions.empty:

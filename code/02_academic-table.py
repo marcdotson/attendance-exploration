@@ -56,7 +56,7 @@ def process_numeric_student_columns(student_table, model_df, df, columns, rename
 
 ######################################################################################################################################################
 # Load Extracurricular file that contains a list of extracurricular classes
-extracurricular_list = pd.read_excel('data/Extracurricular Classes.xlsx')
+extracurricular_list = pd.read_excel('C:/Users/emmar/Git Repositories/attendance-exploration-1/data/Extracurricular Classes.xlsx')
 extracurricular_list.head()
 # Create two empty dictionaries to store df and model_df for each year: df_dict and model_dict
 df_dict = {}
