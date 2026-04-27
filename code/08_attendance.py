@@ -15,8 +15,8 @@ FIG_DIR   = ROOT / "figures"
 MIN_N              = 30
 MIN_MEMBERSHIP     = 60
 CHRONIC_ABSENT_PCT = 10.0
-# Improver definition (all charts 9–15): must have *observed* anchor year (first_good_year − 1)
-# with attendance strictly below this, and *observed* first good year with attendance ≥ this.
+# Improver definition (all charts 9–15): any student with at least one poor year (< 90%)
+# and a later good year (>= 95%), allowing intermediate years in [90, 95).
 IMPROVER_POOR_MAX_PCT = 90.0
 IMPROVER_GOOD_MIN_PCT = 95.0
 
@@ -117,8 +117,8 @@ _dbase["_disability_group"] = np.where(
     _dbase["scram_membership"].fillna(0) > 0, "Disability", "No Disability"
 )
 
-# Improver charts base (9–15) — 09-style filters, then importers are restricted to students
-# with anchor year < POOR_MAX and first good year ≥ GOOD_MIN (see _improvers below).
+# Improver charts base (9–15) — 09-style filters, then improvers are students with
+# any later good year after at least one poor year (see _improvers below).
 _base_imp = df[
     (df["school_membership"] >= MIN_MEMBERSHIP) &
     df["year"].notna() &
@@ -136,7 +136,7 @@ _base_imp = _base_imp[
 
 _poor_rows = _base_imp[_base_imp["percent_days_attended"] < IMPROVER_POOR_MAX_PCT].copy()
 
-# Candidate: first year ≥ good min after first year < poor max (same structure as 09)
+# Improver candidate: first observed poor year, and first observed good year after that poor year.
 _first_poor_yr = _poor_rows.groupby("student_number")["year"].min().rename("first_poor_year")
 _good_rows = (
     _base_imp[_base_imp["percent_days_attended"] >= IMPROVER_GOOD_MIN_PCT][["student_number", "year"]]
@@ -145,42 +145,7 @@ _good_rows = (
 _good_rows = _good_rows[_good_rows["year"] > _good_rows["first_poor_year"]]
 _first_good_yr = _good_rows.groupby("student_number")["year"].min().rename("first_good_year")
 _cand = pd.concat([_first_poor_yr, _first_good_yr], axis=1).dropna()
-
-# Strict improver: observed (anchor_year, first_good_year) = consecutive years with
-# pct < 90% then ≥ 95% (drops cases where the year before first good was not < 90% or first good < 95%).
-_pct_by_sy = _base_imp[["student_number", "year", "percent_days_attended"]].drop_duplicates(
-    subset=["student_number", "year"], keep="first"
-)
-_iv = _cand.reset_index()
-_iv = _iv.assign(anchor_year=_iv["first_good_year"] - 1)
-_miv = _iv.merge(
-    _pct_by_sy,
-    left_on=["student_number", "anchor_year"],
-    right_on=["student_number", "year"],
-    how="left",
-)
-_miv = _miv.drop(columns=["year"], errors="ignore").rename(
-    columns={"percent_days_attended": "p_anchor"},
-)
-_miv = _miv.merge(
-    _pct_by_sy.rename(
-        columns={"year": "first_good_yr", "percent_days_attended": "p_first_good"}
-    ),
-    left_on=["student_number", "first_good_year"],
-    right_on=["student_number", "first_good_yr"],
-    how="left",
-)
-_miv = _miv.drop(columns=["first_good_yr"], errors="ignore")
-_mask_imp = (
-    _miv["p_anchor"].notna()
-    & _miv["p_first_good"].notna()
-    & (_miv["p_anchor"] < IMPROVER_POOR_MAX_PCT)
-    & (_miv["p_first_good"] >= IMPROVER_GOOD_MIN_PCT)
-)
-_improvers = (
-    _miv.loc[_mask_imp, ["student_number", "first_poor_year", "first_good_year"]]
-    .set_index("student_number")
-)
+_improvers = _cand.copy()
 
 # Anchor at first_good_year - 1 (for denominator: pool of poor student-years in the last school year before good)
 _anchor = _improvers.reset_index()[["student_number", "first_good_year"]].copy()
@@ -217,7 +182,7 @@ _poor_rows_disp["disp_school"] = _poor_rows_disp["fg_school"].fillna(_poor_rows_
 _poor_rows_disp_school = _poor_rows_disp.dropna(subset=["disp_school"])
 
 # Per improver: grade in anchor year (last year before first good) vs grade in first good year.
-# Used for percentage_of_improvers_by_grade: bar G = (G−1 → G) transitions vs all poor at G−1 in anchor.
+# Used for proportion_of_improvers_by_grade: bar G = (G−1 → G) transitions vs all poor at G−1 in anchor.
 _impr_pair = (
     _anchor.merge(
         _sg_lookup,
@@ -378,7 +343,7 @@ for _bar, _row in zip(_bars, _agg3.itertuples()):
         f"n={_row.n:,}", ha="center", fontsize=7, color="#555555"
     )
 ax.set_xlabel("Grade")
-ax.set_ylabel("Share of eligible student-years chronically absent")
+ax.set_ylabel("Percentage of eligible student-years chronically absent")
 ax.set_title(
     "Chronic absenteeism rate by grade\n"
     f"(eligible = school_membership ≥ {MIN_MEMBERSHIP}; chronic = ≥{CHRONIC_ABSENT_PCT:.0f}% days missed)",
@@ -514,7 +479,7 @@ for _bar, _n in zip(_sbars, _sagg["n"]):
         _bar.get_width() + 0.002, _bar.get_y() + _bar.get_height() / 2,
         f"n={_n:,}", va="center", fontsize=7, color="#555555"
     )
-ax.set_xlabel("Share of eligible student-years chronically absent")
+ax.set_xlabel("Percentage of eligible student-years chronically absent")
 ax.set_title(
     "Chronic absenteeism rate by school\n"
     f"(eligible = school_membership ≥ {MIN_MEMBERSHIP}; chronic = ≥{CHRONIC_ABSENT_PCT:.0f}% days missed)",
@@ -598,20 +563,55 @@ print("Wrote Chronic Absenteeism.png")
 
 _m9g = _anc_grade[_anc_grade["current_grade"].between(1, 12)]
 if not _m9g.empty:
-    _counts9 = (
+    _counts9_imp = (
         _m9g.groupby("current_grade", as_index=False)
         .size()
-        .rename(columns={"size": "n"})
+        .rename(columns={"size": "n_improvers"})
         .sort_values("current_grade")
+    )
+    _poor_grade_num = pd.to_numeric(_poor_rows["current_grade"], errors="coerce")
+    _poor_for_chart9 = _poor_rows.loc[_poor_grade_num.notna(), ["student_number"]].copy()
+    _poor_for_chart9["grade"] = _poor_grade_num[_poor_grade_num.notna()].astype(int).values
+    _counts9_poor = (
+        _poor_for_chart9.groupby("grade", as_index=False)["student_number"]
+        .nunique()
+        .rename(columns={"student_number": "n_poor"})
+    )
+    _counts9 = (
+        _counts9_imp.rename(columns={"current_grade": "grade"})
+        .merge(_counts9_poor, on="grade", how="outer")
+        .fillna(0)
+        .sort_values("grade")
+    )
+    _counts9_long = _counts9.melt(
+        id_vars="grade",
+        value_vars=["n_improvers", "n_poor"],
+        var_name="cohort",
+        value_name="n",
+    )
+    _counts9_long["cohort"] = _counts9_long["cohort"].map(
+        {
+            "n_improvers": "Improvers",
+            "n_poor": "Poor Attenders",
+        }
     )
     fig, ax = plt.subplots(figsize=(8, 5))
     sns.set_theme(style="whitegrid")
-    sns.barplot(data=_counts9, x="current_grade", y="n", color="#4c72b0", ax=ax)
+    sns.barplot(
+        data=_counts9_long,
+        x="grade",
+        y="n",
+        hue="cohort",
+        hue_order=["Improvers", "Poor Attenders"],
+        palette=["#4c72b0", "#c44e52"],
+        ax=ax,
+    )
     ax.set_xlabel("Grade")
     ax.set_ylabel("Total Students")
     ax.set_title(
-        "Improvers Count by Grade"
+        "Improvers vs Poor Attenders by Grade"
     )
+    ax.legend(title=None, loc="upper right", fontsize=8)
     fig.tight_layout()
     fig.savefig(FIG_DIR / "improvers_count_by_grade.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -619,21 +619,18 @@ if not _m9g.empty:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# CHART 10 — Share of prior-year poor who reach first good on the next grade step
-#   Bar at grade G:  (improvers with anchor_grade G−1 and first-good grade G)
-#                    / (all students with poor record in anchor year at grade G−1).
-#   Example G=9: first good in 9th / all poor in 8th in the anchor (pre-good) year.
+# CHART 10 — Proportion of improvers to poor attenders by grade
+#   Bar at grade G:  (improvers with first-good grade G)
+#                    / (all students with poor attendance in grade G).
 # ═══════════════════════════════════════════════════════════════════════════════
 
-_pc = pd.to_numeric(_poor_rows_anchor["current_grade"], errors="coerce")
+_pc = pd.to_numeric(_poor_rows["current_grade"], errors="coerce")
 _rows10: list[dict[str, float | int]] = []
 for _g in range(2, 13):
-    _n_poor_g = _poor_rows_anchor[_pc == _g - 1]["student_number"].nunique()
+    _n_poor_g = _poor_rows[_pc == _g]["student_number"].nunique()
     if _n_poor_g <= 0:
         continue
-    _n_tr = _impr_pair[
-        (_impr_pair["anchor_grade"] == _g - 1) & (_impr_pair["fg_grade"] == _g)
-    ]["student_number"].nunique()
+    _n_tr = _impr_pair[_impr_pair["fg_grade"] == _g]["student_number"].nunique()
     _rows10.append(
         {"grade": _g, "n": _n_tr / _n_poor_g, "n_trans": _n_tr, "n_poor": _n_poor_g}
     )
@@ -644,12 +641,12 @@ if not _grade_counts.empty:
     sns.set_theme(style="whitegrid")
     sns.barplot(data=_grade_counts, x="grade", y="n", color="#8172b3", ax=ax)
     ax.set_xlabel("Grade")
-    ax.set_ylabel("Improvers / All Poor Attenders")
-    ax.set_title("Percentage of Improvers by Grade")
+    ax.set_ylabel("Improvers / Poor Attenders")
+    ax.set_title("Proportion of Improvers to Poor Attenders by Grade")
     fig.tight_layout()
-    fig.savefig(FIG_DIR / "percentage_of_improvers_by_grade.png", dpi=150, bbox_inches="tight")
+    fig.savefig(FIG_DIR / "proportion_of_improvers_to_poor_attenders_by_grade.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print("Wrote percentage_of_improvers_by_grade.png")
+    print("Wrote proportion_of_improvers_to_poor_attenders_by_grade.png")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -666,7 +663,7 @@ if not _improver_school_counts.empty:
     sns.set_theme(style="whitegrid")
     sns.barplot(data=_improver_school_counts, x="current_school", y="n", color="#4c72b0", ax=ax)
     ax.set_xlabel("School")
-    ax.set_ylabel("Total Students")
+    ax.set_ylabel("Total Improvers")
     ax.set_title(
         "Improvers by School"
     )
@@ -678,7 +675,7 @@ if not _improver_school_counts.empty:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# CHART 12 — Percentage of improvers by school (first good-attendance year)
+# CHART 12 — Proportion of improvers by school (first good-attendance year)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _t12 = _anc_school.groupby("current_school", as_index=False)["student_number"].nunique().rename(
@@ -700,16 +697,16 @@ if not _school_counts.empty:
     sns.barplot(data=_school_counts, x="current_school", y="n", color="#4c72b0", ax=ax)
     ax.set_xlabel("School")
     ax.set_ylabel("Improvers / All Poor Attenders")
-    ax.set_title("Percentage of Improvers by School")
+    ax.set_title("Proportion of Improvers by School")
     plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
     fig.tight_layout()
-    fig.savefig(FIG_DIR / "percentage_of_improvers_by_school.png", dpi=150, bbox_inches="tight")
+    fig.savefig(FIG_DIR / "proportion_of_improvers_by_school.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print("Wrote percentage_of_improvers_by_school.png")
+    print("Wrote proportion_of_improvers_by_school.png")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# CHART 13 — Percentage of improvers by school group (first good-attendance year)
+# CHART 13 — Proportion of improvers by school group (first good-attendance year)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _hs_names = {str(i).strip() for i in pd.read_csv(_hs_path, index_col=0).index} if _hs_path.is_file() else set()
@@ -754,16 +751,16 @@ if not _group_counts.empty:
     ax.set_xlabel("School Group")
     ax.set_ylabel("Improvers / All Poor Attenders")
     ax.set_title(
-        "Percentage of Improvers by School Group"
+        "Proportion of Improvers by School Group"
     )
     fig.tight_layout()
-    fig.savefig(FIG_DIR / "percentage_of_improvers_by_school_group.png", dpi=150, bbox_inches="tight")
+    fig.savefig(FIG_DIR / "proportion_of_improvers_by_school_group.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print("Wrote percentage_of_improvers_by_school_group.png")
+    print("Wrote proportion_of_improvers_by_school_group.png")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# CHART 14 — Top 10 teachers by improver share, split by school level (ES / MS / HS)
+# CHART 14 — Top 10 teachers by improver percentage, split by school level (ES / MS / HS)
 #   All poor→good improvers (any years-to-good), teacher links in *anchor* year
 #   (first_good_year − 1). Poor pool: same anchor years, poor (<90) student-years
 #   with a link. Supplement: mean % attendance for improvers in the *first good* year vs
@@ -817,8 +814,8 @@ if _tg_path.is_file() and not _anchor.empty:
         _merged_enrolled14 = _tgrid[["student_number", "year"] + _tcols].merge(_enrolled_sy14, on=["student_number", "year"], how="inner")
         _n_enrolled14 = (_merged_enrolled14[_tcols] > 0).sum(axis=0).astype(int)
 
-        # Mean attendance: all student-years on teacher roster vs improvers in *first good* year
-        # (teacher link is still at anchor; attendance for improvers = year of first good ≥ 95%)
+        # Mean attendance: good-attendance student-years on teacher roster (>=95%) vs improvers
+        # in *first good* year (teacher link is still at anchor; improver attendance uses first good year)
         _tgrid_att = _tgrid.merge(
             _base_imp[["student_number", "year", "percent_days_attended"]].drop_duplicates(
                 subset=["student_number", "year"]
@@ -837,8 +834,9 @@ if _tg_path.is_file() and not _anchor.empty:
         )
         _exp_att = _exp_att.drop(columns=["year"], errors="ignore")
 
-        def _class_mean_att(_col: str) -> float:
+        def _class_good_mean_att(_col: str) -> float:
             _d = _tgrid_att[pd.to_numeric(_tgrid_att[_col], errors="coerce") >= 1.0]
+            _d = _d[_d["percent_days_attended"] >= IMPROVER_GOOD_MIN_PCT]
             if _d.empty or _d["percent_days_attended"].isna().all():
                 return float("nan")
             return float(_d["percent_days_attended"].mean())
@@ -900,7 +898,7 @@ if _tg_path.is_file() and not _anchor.empty:
                 ax.set_xlabel("Improvers / All Poor Attenders")
                 ax.set_ylabel("Teacher")
                 ax.set_title(
-                    f"Top {_TEACHER_TOP_N} Teachers by Share of Improvers — {_tier}"
+                    f"Top {_TEACHER_TOP_N} Teachers by Percentage of Improvers — {_tier}"
                 )
                 _max_x = float(_plot_t["ratio_plot"].max()) if not _plot_t.empty else 0.0
                 _x_pad = max(0.02, 0.04 * _max_x) if _max_x > 0 else 0.05
@@ -927,11 +925,17 @@ if _tg_path.is_file() and not _anchor.empty:
                     if _tcol not in _tcols:
                         continue
                     _mi = _improver_mean_att(_tcol)
-                    _mc = _class_mean_att(_tcol)
+                    _mc = _class_good_mean_att(_tcol)
                     if pd.isna(_mi) and pd.isna(_mc):
                         continue
                     _supp_rows.append({"teacher": _tcol, "cohort": "Improvers", "mean_att": _mi})
-                    _supp_rows.append({"teacher": _tcol, "cohort": "All Students with Teacher", "mean_att": _mc})
+                    _supp_rows.append(
+                        {
+                            "teacher": _tcol,
+                            "cohort": f"Good-Attendance Students with Teacher (>= {IMPROVER_GOOD_MIN_PCT:.0f}%)",
+                            "mean_att": _mc,
+                        }
+                    )
                 if _supp_rows:
                     _sdf = pd.DataFrame(_supp_rows)
                     _sdf = _sdf[_sdf["mean_att"].notna()].copy()
@@ -954,7 +958,7 @@ if _tg_path.is_file() and not _anchor.empty:
                         _ax2.set_xlabel("Mean Percent Days Attended")
                         _ax2.set_ylabel("Teacher")
                         _ax2.set_title(
-                            f"Mean Attendance: Improvers vs All Students with Teacher — {_tier}"
+                            f"Mean Attendance: Improvers vs Good-Attendance Students with Teacher — {_tier}"
                         )
                         _ax2.set_xlim(0, 105)
                         _ax2.legend(title=None, loc="lower right", fontsize=8)
