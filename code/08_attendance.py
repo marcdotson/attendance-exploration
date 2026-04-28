@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
@@ -27,6 +28,28 @@ _hs_path = ROOT / "data" / "hs_teacher_data.csv"
 _ms_path = ROOT / "data" / "ms_teacher_data.csv"
 _es_path = ROOT / "data" / "es_teacher_data.csv"
 _tg_path = ROOT / "data" / "all_teachers_grid_by_year.csv"
+
+_hs_names = {str(i).strip() for i in pd.read_csv(_hs_path, index_col=0).index} if _hs_path.is_file() else set()
+_ms_names = {str(i).strip() for i in pd.read_csv(_ms_path, index_col=0).index} if _ms_path.is_file() else set()
+_es_names = {str(i).strip() for i in pd.read_csv(_es_path, index_col=0).index} if _es_path.is_file() else set()
+
+
+def _group_label(school_name: object) -> str:
+    s = str(school_name).strip()
+    sl = s.lower()
+    if s in _es_names or "elem." in sl:
+        return "Elementary"
+    if s in _ms_names or "middle" in sl:
+        return "Middle School"
+    return "High School"
+
+
+_SCHOOL_GROUP_COLORS: dict[str, str] = {
+    "Elementary": "#55a868",
+    "Middle School": "#4c72b0",
+    "High School": "#c44e52",
+}
+_SCHOOL_EXCLUDE = {"cache high", "other"}
 
 # ── Load & coerce ──────────────────────────────────────────────────────────────
 df = pd.read_csv(DATA_PATH, low_memory=False)
@@ -295,8 +318,7 @@ ax.legend(fontsize=8)
 
 ax = axes[1, 1]
 if "ethnicity" in _base_gpa.columns:
-    _eth_labels = {"white": "White", "latinx": "Latinx"}
-    for _eth in ["white", "latinx"]:
+    for _eth, _lbl in [("white", "White"), ("latinx", "Latinx")]:
         _sub = _base_gpa[_base_gpa["ethnicity"] == _eth].copy()
         if len(_sub) < 50:
             continue
@@ -306,19 +328,104 @@ if "ethnicity" in _base_gpa.columns:
             .agg(mean_gpa=("overall_gpa", "mean"), mid_att=("percent_days_attended", "mean"))
             .reset_index()
         )
-        ax.plot(_eagg["mid_att"], _eagg["mean_gpa"], marker=".", label=_eth_labels[_eth])
+        ax.plot(_eagg["mid_att"], _eagg["mean_gpa"], marker=".", label=_lbl)
 ax.set_xlabel("Percent Days Attended")
 ax.set_ylabel("Mean GPA")
 ax.set_title("D. Mean GPA vs Attendance by Ethnicity")
 ax.legend(fontsize=7)
 
-fig.suptitle(
-    "Relationship between Attendance and GPA",
-    fontsize=18,
-    y=1.02,
-)
+fig.suptitle("Relationship between Attendance and GPA", fontsize=18, y=1.02)
 fig.tight_layout()
 fig.savefig(FIG_DIR / "attendance_gpa_hinge.png", dpi=150, bbox_inches="tight")
+plt.close(fig)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CHART 2b — ACT hinge: binned mean ACT composite score vs attendance (overall + subgroups)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_base_act = df[
+    (df["school_membership"] > 119) &
+    df["composite_score"].notna() & (df["composite_score"] > 0) &
+    (df["current_grade"] >= 7)
+].copy()
+_base_act = _base_act[_base_act["percent_days_attended"].between(50, 100)]
+_bins_act = np.linspace(_base_act["percent_days_attended"].min(), 100, 21)
+_base_act["att_bin"] = pd.cut(_base_act["percent_days_attended"], bins=_bins_act, include_lowest=True)
+_agg_act = (
+    _base_act.groupby("att_bin", observed=True)
+    .agg(mean_act=("composite_score", "mean"), mid_att=("percent_days_attended", "mean"), n=("student_number", "count"))
+    .reset_index()
+)
+
+fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+sns.set_theme(style="whitegrid")
+
+ax = axes[0, 0]
+ax.plot(_agg_act["mid_att"], _agg_act["mean_act"], marker="o", color="#1f77b4")
+ax.set_xlabel("Percent Days Attended")
+ax.set_ylabel("Mean ACT Composite Score")
+ax.set_title("A. Mean ACT Score by Attendance")
+
+ax = axes[0, 1]
+_grades_act = sorted(_base_act["current_grade"].dropna().unique().astype(int).tolist())
+_grades_act = [g for g in _grades_act if 1 <= g <= 12]
+for _g in _grades_act[:8]:
+    _sub = _base_act[_base_act["current_grade"] == _g].copy()
+    if len(_sub) < 200:
+        continue
+    _sub["att_bin"] = pd.cut(_sub["percent_days_attended"], bins=_bins_act, include_lowest=True)
+    _gagg = (
+        _sub.groupby("att_bin", observed=True)
+        .agg(mean_act=("composite_score", "mean"), mid_att=("percent_days_attended", "mean"))
+        .reset_index()
+    )
+    ax.plot(_gagg["mid_att"], _gagg["mean_act"], marker=".", label=f"Grade {_g}")
+ax.set_xlabel("Percent Days Attended")
+ax.set_ylabel("Mean ACT Composite Score")
+ax.set_title("B. Mean ACT Score vs Attendance by Grade")
+ax.legend(title="Grade", fontsize=7, ncol=2)
+
+ax = axes[1, 0]
+if "gender" in _base_act.columns:
+    _gender_vals_act = _base_act["gender"].astype(str).str.strip().str.upper()
+    for _gend in ["M", "F"]:
+        _sub = _base_act[_gender_vals_act == _gend].copy()
+        if len(_sub) < 300:
+            continue
+        _sub["att_bin"] = pd.cut(_sub["percent_days_attended"], bins=_bins_act, include_lowest=True)
+        _gagg = (
+            _sub.groupby("att_bin", observed=True)
+            .agg(mean_act=("composite_score", "mean"), mid_att=("percent_days_attended", "mean"))
+            .reset_index()
+        )
+        ax.plot(_gagg["mid_att"], _gagg["mean_act"], marker=".", label=_gend)
+ax.set_xlabel("Percent Days Attended")
+ax.set_ylabel("Mean ACT Composite Score")
+ax.set_title("C. Mean ACT Score vs Attendance by Gender")
+ax.legend(fontsize=8)
+
+ax = axes[1, 1]
+if "ethnicity" in _base_act.columns:
+    for _eth, _lbl in [("white", "White"), ("latinx", "Latinx")]:
+        _sub = _base_act[_base_act["ethnicity"] == _eth].copy()
+        if len(_sub) < 50:
+            continue
+        _sub["att_bin"] = pd.cut(_sub["percent_days_attended"], bins=_bins_act, include_lowest=True)
+        _eagg = (
+            _sub.groupby("att_bin", observed=True)
+            .agg(mean_act=("composite_score", "mean"), mid_att=("percent_days_attended", "mean"))
+            .reset_index()
+        )
+        ax.plot(_eagg["mid_att"], _eagg["mean_act"], marker=".", label=_lbl)
+ax.set_xlabel("Percent Days Attended")
+ax.set_ylabel("Mean ACT Composite Score")
+ax.set_title("D. Mean ACT Score vs Attendance by Ethnicity")
+ax.legend(fontsize=7)
+
+fig.suptitle("Relationship between Attendance and ACT Score", fontsize=18, y=1.02)
+fig.tight_layout()
+fig.savefig(FIG_DIR / "attendance_act_hinge.png", dpi=150, bbox_inches="tight")
 plt.close(fig)
 
 
@@ -396,39 +503,65 @@ if _rows4:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# CHART 5 — Chronic absenteeism by demographics
+# CHART 5a — Chronic absenteeism by ethnicity (with n sizes)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-fig, axes = plt.subplots(1, 3, figsize=(14, 5))
+if "ethnicity" in _dbase.columns:
+    _eth_agg5a = (
+        _dbase[_dbase["ethnicity"].isin(CHART_ETHNICITY_ORDER)]
+        .groupby("ethnicity", observed=True)
+        .agg(n=("student_number", "count"), n_chronic=("_chronic", "sum"))
+        .reindex(list(CHART_ETHNICITY_ORDER))
+        .dropna()
+        .reset_index()
+    )
+    _eth_agg5a["chronic_rate"] = _eth_agg5a["n_chronic"] / _eth_agg5a["n"]
+    _eth_labels5a = [CHART_ETHNICITY_LABEL[k] for k in _eth_agg5a["ethnicity"]]
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    sns.set_theme(style="whitegrid")
+    _bars5a = ax.barh(_eth_labels5a, _eth_agg5a["chronic_rate"], color="#4c72b0")
+    _max_rate5a = float(_eth_agg5a["chronic_rate"].max()) if not _eth_agg5a.empty else 0.1
+    for _bar, _n in zip(_bars5a, _eth_agg5a["n"]):
+        ax.text(
+            _bar.get_width() + 0.002, _bar.get_y() + _bar.get_height() / 2,
+            f"n={int(_n):,}", va="center", fontsize=8, color="#555555"
+        )
+    ax.set_xlabel("Percent Chronically Absent")
+    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:.0%}"))
+    ax.set_xlim(0, _max_rate5a * 1.25)
+    ax.set_title("Chronic Absenteeism Rate by Ethnicity", fontsize=13)
+    fig.tight_layout()
+    fig.savefig(FIG_DIR / "chronic_absenteeism_by_ethnicity.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print("Wrote chronic_absenteeism_by_ethnicity.png")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CHART 5b — Chronic absenteeism by gender and disability status
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fig, axes = plt.subplots(1, 2, figsize=(10, 5))
 sns.set_theme(style="whitegrid")
 
 ax = axes[0]
-if "ethnicity" in _dbase.columns:
-    _r_eth = [_chronic_rate(_dbase[_dbase["ethnicity"] == k]) for k in CHART_ETHNICITY_ORDER]
-    _l_eth = [CHART_ETHNICITY_LABEL[k] for k in CHART_ETHNICITY_ORDER]
-    ax.barh(_l_eth, _r_eth, color="#4c72b0")
-    ax.set_xlabel("Percent Chronically Absent")
-    ax.set_title("A. Chronic Absenteeism Rate by Ethnicity")
-else:
-    ax.set_visible(False)
-
-ax = axes[1]
 if "gender" in _dbase.columns:
-    _gvals5 = _dbase["gender"].astype(str).str.strip().str.upper()
-    _glabels5 = {"M": "Male", "F": "Female"}
-    _grps5 = [g for g in ["M", "F"] if (_gvals5 == g).any()]
+    _gvals5b = _dbase["gender"].astype(str).str.strip().str.upper()
+    _glabels5b = {"M": "Male", "F": "Female"}
+    _grps5b = [g for g in ["M", "F"] if (_gvals5b == g).any()]
     ax.bar(
-        [_glabels5[g] for g in _grps5],
-        [_chronic_rate(_dbase[_gvals5 == g]) for g in _grps5],
+        [_glabels5b[g] for g in _grps5b],
+        [_chronic_rate(_dbase[_gvals5b == g]) for g in _grps5b],
         color="#c44e52",
     )
     ax.set_ylabel("Percent Chronically Absent")
-    ax.set_title("B. Chronic Absenteeism Rate by Gender")
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:.0%}"))
+    ax.set_title("A. Chronic Absenteeism Rate by Gender")
     ax.tick_params(axis="x", rotation=20)
 else:
     ax.set_visible(False)
 
-ax = axes[2]
+ax = axes[1]
 if "scram_membership" in _dbase.columns:
     _ord_dis = ["No Disability", "Disability"]
     _dis_rates = (
@@ -440,7 +573,8 @@ if "scram_membership" in _dbase.columns:
     if not _dis_rates.empty:
         ax.bar(_dis_rates.index.astype(str), _dis_rates.values, color=["#4c72b0", "#c44e52"])
         ax.set_ylabel("Percent Chronically Absent")
-        ax.set_title("C. Chronic Absenteeism Rate by Disability Status")
+        ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:.0%}"))
+        ax.set_title("B. Chronic Absenteeism Rate by Disability Status")
         ax.tick_params(axis="x", rotation=15)
     else:
         ax.set_visible(False)
@@ -449,17 +583,18 @@ else:
     ax.set_axis_off()
 
 fig.suptitle(
-    "Chronic Absenteeism by Demographics",
-    fontsize=18,
+    "Chronic Absenteeism by Gender and Disability Status",
+    fontsize=16,
     y=1.02,
 )
 fig.tight_layout()
-fig.savefig(FIG_DIR / "chronic_absenteeism_by_demographics.png", dpi=150, bbox_inches="tight")
+fig.savefig(FIG_DIR / "chronic_absenteeism_by_gender_disability.png", dpi=150, bbox_inches="tight")
 plt.close(fig)
+print("Wrote chronic_absenteeism_by_gender_disability.png")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# CHART 6 — Chronic absenteeism rate by school
+# CHART 6 — Chronic absenteeism rate by school (color-coded by school group)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _sagg = (
@@ -469,11 +604,18 @@ _sagg = (
     .reset_index()
 )
 _sagg["chronic_rate"] = _sagg["n_chronic"] / _sagg["n"]
-_sagg = _sagg[_sagg["n"] >= MIN_N].sort_values("chronic_rate", ascending=True)
+_sagg = _sagg[_sagg["n"] >= MIN_N]
+_sagg = _sagg[~_sagg["_school"].str.strip().str.lower().isin(_SCHOOL_EXCLUDE)]
+_sagg["school_group"] = _sagg["_school"].map(_group_label)
+_sagg = _sagg.sort_values("chronic_rate", ascending=True)
 
 fig, ax = plt.subplots(figsize=(9, max(4, len(_sagg) * 0.45)))
 sns.set_theme(style="whitegrid")
-_sbars = ax.barh(_sagg["_school"], _sagg["chronic_rate"], color="#c44e52")
+_sbars = ax.barh(
+    _sagg["_school"],
+    _sagg["chronic_rate"],
+    color=_sagg["school_group"].map(_SCHOOL_GROUP_COLORS),
+)
 for _bar, _n in zip(_sbars, _sagg["n"]):
     ax.text(
         _bar.get_width() + 0.002, _bar.get_y() + _bar.get_height() / 2,
@@ -486,10 +628,38 @@ ax.set_title(
     fontsize=11,
 )
 ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:.0%}"))
+_legend_patches = [
+    mpatches.Patch(color=_SCHOOL_GROUP_COLORS[g], label=g) for g in _SCHOOL_GROUP_ORDER
+]
+ax.legend(handles=_legend_patches, title="School Group", fontsize=8, loc="lower right")
 fig.tight_layout()
 fig.savefig(FIG_DIR / "chronic_rate_by_school.png", dpi=150, bbox_inches="tight")
 plt.close(fig)
 print("Wrote chronic_rate_by_school.png")
+
+
+# ── Drill-down: chronic absenteeism by school, one chart per school group ─────
+
+for _tier6 in _SCHOOL_GROUP_ORDER:
+    _sub6 = _sagg[_sagg["school_group"] == _tier6].sort_values("chronic_rate", ascending=True)
+    if _sub6.empty:
+        continue
+    _slug6 = _tier6.lower().replace(" ", "_")
+    fig, ax = plt.subplots(figsize=(9, max(4, len(_sub6) * 0.55)))
+    sns.set_theme(style="whitegrid")
+    _sbars6 = ax.barh(_sub6["_school"], _sub6["chronic_rate"], color=_SCHOOL_GROUP_COLORS[_tier6])
+    for _bar, _n in zip(_sbars6, _sub6["n"]):
+        ax.text(
+            _bar.get_width() + 0.002, _bar.get_y() + _bar.get_height() / 2,
+            f"n={_n:,}", va="center", fontsize=8, color="#555555"
+        )
+    ax.set_xlabel("Percentage of eligible student-years chronically absent")
+    ax.set_title(f"Chronic Absenteeism Rate — {_tier6} Schools", fontsize=12)
+    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:.0%}"))
+    fig.tight_layout()
+    fig.savefig(FIG_DIR / f"chronic_rate_by_school_{_slug6}.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Wrote chronic_rate_by_school_{_slug6}.png")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -545,9 +715,15 @@ _chronic_yrs8 = (
 _df8 = _df8.merge(_chronic_yrs8, on="student_number")
 _df8 = _df8[(_df8["current_grade"] >= 9) & _df8["overall_gpa"].notna()]
 
+_n_by_yrs8 = _df8.groupby("years_chronic_total")["student_number"].nunique()
+
 fig, ax = plt.subplots(figsize=(12, 6))
 sns.set_theme(style="whitegrid")
 sns.boxplot(data=_df8, x="years_chronic_total", y="overall_gpa", palette="viridis", ax=ax)
+ax.set_xticklabels(
+    [f"{int(t.get_text())}\nn={_n_by_yrs8.get(int(t.get_text()), 0):,}" for t in ax.get_xticklabels()],
+    fontsize=8,
+)
 ax.set_xlabel("Total Years Student was Chronically Absent")
 ax.set_ylabel("Overall GPA")
 ax.set_title("Total Years Chronically Absent vs. High School GPA", fontsize=14)
@@ -708,19 +884,6 @@ if not _school_counts.empty:
 # ═══════════════════════════════════════════════════════════════════════════════
 # CHART 13 — Proportion of improvers by school group (first good-attendance year)
 # ═══════════════════════════════════════════════════════════════════════════════
-
-_hs_names = {str(i).strip() for i in pd.read_csv(_hs_path, index_col=0).index} if _hs_path.is_file() else set()
-_ms_names = {str(i).strip() for i in pd.read_csv(_ms_path, index_col=0).index} if _ms_path.is_file() else set()
-_es_names = {str(i).strip() for i in pd.read_csv(_es_path, index_col=0).index} if _es_path.is_file() else set()
-
-def _group_label(school_name: object) -> str:
-    s = str(school_name).strip()
-    sl = s.lower()
-    if s in _es_names or "elem." in sl:
-        return "Elementary"
-    if s in _ms_names or "middle" in sl:
-        return "Middle School"
-    return "High School"
 
 _n_trans13 = (
     _anc_school.assign(school_group=_anc_school["current_school"].map(_group_label))
