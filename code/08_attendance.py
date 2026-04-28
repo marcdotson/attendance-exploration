@@ -110,7 +110,7 @@ _cbase["_school"] = (_cbase["current_school"].astype(str).str.strip()
 _cbase_gpa = _cbase[_cbase["overall_gpa"].notna() & (_cbase["_grade"] >= 7)].copy()
 
 # Demographics chart (5)
-_dbase = df[df["school_membership"] > 119].copy()
+_dbase = df[df["school_membership"] >= MIN_MEMBERSHIP].copy()
 _dbase["_pct_absent"] = 100.0 * _dbase["days_absent"].fillna(0) / _dbase["school_membership"]
 _dbase["_chronic"] = _dbase["_pct_absent"] >= CHRONIC_ABSENT_PCT
 _dbase["_disability_group"] = np.where(
@@ -126,9 +126,7 @@ _base_imp = df[
 ].copy()
 if "exit_code" in _base_imp.columns:
     _exit_num = pd.to_numeric(_base_imp["exit_code"], errors="coerce")
-    _base_imp = _base_imp[_exit_num.isna() | (_exit_num == 0)].copy()
 _base_imp = _base_imp[_base_imp["current_school"].astype(str).str.strip().str.lower() != "other"].copy()
-_base_imp = _base_imp[_base_imp["year"] >= 2022].copy()
 _base_imp["current_school"] = _base_imp["current_school"].astype(str).str.strip()
 _base_imp = _base_imp[
     (_base_imp["current_school"] != "") & (_base_imp["current_school"] != "nan")
@@ -210,7 +208,7 @@ _impr_pair["fg_grade"] = pd.to_numeric(_impr_pair["fg_grade"], errors="coerce")
 # CHART 1 — Overall attendance bins through the district
 # ═══════════════════════════════════════════════════════════════════════════════
 
-_base1 = df[(df["school_membership"] > 119) & df["percent_days_attended"].between(0, 100)].copy()
+_base1 = df[(df["school_membership"] >= MIN_MEMBERSHIP) & df["percent_days_attended"].between(0, 100)].copy()
 _bins1 = np.arange(0, 105, 5)
 _labels1 = [f"{i}-{i + 5}" for i in range(0, 100, 5)]
 _base1["att_bucket"] = pd.cut(_base1["percent_days_attended"], bins=_bins1, labels=_labels1, include_lowest=True, right=True)
@@ -233,7 +231,7 @@ plt.close(fig)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _base_gpa = df[
-    (df["school_membership"] > 119) &
+    (df["school_membership"] >= MIN_MEMBERSHIP) &
     df["overall_gpa"].notna() & (df["overall_gpa"] > 0) &
     (df["current_grade"] >= 7)
 ].copy()
@@ -343,17 +341,17 @@ for _bar, _row in zip(_bars, _agg3.itertuples()):
         f"n={_row.n:,}", ha="center", fontsize=7, color="#555555"
     )
 ax.set_xlabel("Grade")
-ax.set_ylabel("Percentage of eligible student-years chronically absent")
+ax.set_ylabel("Rate of Chronic Absenteeism")
 ax.set_title(
-    "Chronic absenteeism rate by grade\n"
-    f"(eligible = school_membership ≥ {MIN_MEMBERSHIP}; chronic = ≥{CHRONIC_ABSENT_PCT:.0f}% days missed)",
-    fontsize=11,
+    "Chronic Absenteeism Rate by Grade",
+    fontsize=18,
 )
 ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:.0%}"))
 ax.set_xticks(_agg3["_grade"])
 fig.tight_layout()
-fig.savefig(FIG_DIR / "grade_chronic_rate_by_grade.png", dpi=150, bbox_inches="tight")
+fig.savefig(FIG_DIR / "chronic_absenteeism_rate_by_grade.png", dpi=150, bbox_inches="tight")
 plt.close(fig)
+print("Wrote chronic_absenteeism_rate_by_grade.png")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -479,11 +477,10 @@ for _bar, _n in zip(_sbars, _sagg["n"]):
         _bar.get_width() + 0.002, _bar.get_y() + _bar.get_height() / 2,
         f"n={_n:,}", va="center", fontsize=7, color="#555555"
     )
-ax.set_xlabel("Percentage of eligible student-years chronically absent")
+ax.set_xlabel("Rate of Chronic Absenteeism")
 ax.set_title(
-    "Chronic absenteeism rate by school\n"
-    f"(eligible = school_membership ≥ {MIN_MEMBERSHIP}; chronic = ≥{CHRONIC_ABSENT_PCT:.0f}% days missed)",
-    fontsize=11,
+    "Chronic Absenteeism Rate by School",
+    fontsize=18,
 )
 ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:.0%}"))
 fig.tight_layout()
@@ -514,28 +511,28 @@ if _rows7:
     _w = 0.38
     fig, ax = plt.subplots(figsize=(10, 5))
     sns.set_theme(style="whitegrid")
-    ax.bar(_x - _w / 2, _gpa_df7["gpa_not"],    _w, color="#4c72b0", label="Not chronically absent")
-    ax.bar(_x + _w / 2, _gpa_df7["gpa_chronic"], _w, color="#c44e52", label="Chronically absent")
+    ax.bar(_x - _w / 2, _gpa_df7["gpa_not"],    _w, color="#4c72b0", label="Not Chronically Absent")
+    ax.bar(_x + _w / 2, _gpa_df7["gpa_chronic"], _w, color="#c44e52", label="Chronically Absent")
     ax.set_xticks(_x)
     ax.set_xticklabels(_gpa_df7["grade"].astype(int))
     ax.set_xlabel("Grade")
-    ax.set_ylabel("Mean cumulative GPA")
+    ax.set_ylabel("Mean GPA")
     ax.set_title(
-        "Mean GPA by grade (7–12): chronically absent vs not\n"
-        f"(suppressed where n < {MIN_N} in either group)",
+        "Chronically-Absent vs. Non-Chronically-Absent GPA by Grade",
         fontsize=11,
     )
     ax.legend(fontsize=9)
     fig.tight_layout()
-    fig.savefig(FIG_DIR / "grade_mean_gpa_chronic_vs_not_by_school.png", dpi=150, bbox_inches="tight")
+    fig.savefig(FIG_DIR / "chronically_absent_vs_non_chronically_absent_gpa_by_grade.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
+    print("Wrote chronically_absent_vs_non_chronically_absent_gpa_by_grade.png")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # CHART 8 — Long-term impact: total years chronically absent vs high school GPA
 # ═══════════════════════════════════════════════════════════════════════════════
 
-_df8 = df[df["school_membership"] >= 90].copy()
+_df8 = df[df["school_membership"] >= MIN_MEMBERSHIP].copy()
 _df8["_is_chronic_yr"] = _df8["percent_days_attended"] < 90
 _chronic_yrs8 = (
     _df8.groupby("student_number")["_is_chronic_yr"]
@@ -550,11 +547,11 @@ sns.set_theme(style="whitegrid")
 sns.boxplot(data=_df8, x="years_chronic_total", y="overall_gpa", palette="viridis", ax=ax)
 ax.set_xlabel("Total Years Student was Chronically Absent")
 ax.set_ylabel("Overall GPA")
-ax.set_title("Total Years Chronically Absent vs. High School GPA", fontsize=14)
+ax.set_title("Total Years Chronically Absent vs. GPA", fontsize=14)
 fig.tight_layout()
-fig.savefig(FIG_DIR / "Chronic Absenteeism.png", dpi=150, bbox_inches="tight")
+fig.savefig(FIG_DIR / "total_years_chronically_absent_vs_gpa.png", dpi=150, bbox_inches="tight")
 plt.close(fig)
-print("Wrote Chronic Absenteeism.png")
+print("Wrote total_years_chronically_absent_vs_gpa.png")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
