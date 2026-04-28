@@ -462,45 +462,6 @@ print("Wrote chronic_absenteeism_rate_by_grade.png")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# CHART 4 — Mean GPA: chronic vs non-chronic by grade (7–12)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-_rows4 = []
-for _g, _grp in _cbase_gpa.groupby("_grade", dropna=True):
-    _n_chr = int(_grp["_chronic"].sum())
-    _n_not = int((~_grp["_chronic"]).sum())
-    if _n_chr < MIN_N or _n_not < MIN_N:
-        continue
-    _rows4.append({
-        "grade":       _g,
-        "gpa_chronic": _grp.loc[_grp["_chronic"], "overall_gpa"].mean(),
-        "gpa_not":     _grp.loc[~_grp["_chronic"], "overall_gpa"].mean(),
-    })
-
-if _rows4:
-    _gpa_df4 = pd.DataFrame(_rows4).sort_values("grade")
-    _x = np.arange(len(_gpa_df4))
-    _w = 0.38
-    fig, ax = plt.subplots(figsize=(10, 5))
-    sns.set_theme(style="whitegrid")
-    ax.bar(_x - _w / 2, _gpa_df4["gpa_not"],    _w, color="#4c72b0", label="Not chronically absent")
-    ax.bar(_x + _w / 2, _gpa_df4["gpa_chronic"], _w, color="#c44e52", label="Chronically absent")
-    ax.set_xticks(_x)
-    ax.set_xticklabels(_gpa_df4["grade"].astype(int))
-    ax.set_xlabel("Grade")
-    ax.set_ylabel("Mean cumulative GPA")
-    ax.set_title(
-        "Mean GPA by grade (7–12): chronically absent vs not\n"
-        f"(suppressed where n < {MIN_N} in either group)",
-        fontsize=11,
-    )
-    ax.legend(fontsize=9)
-    fig.tight_layout()
-    fig.savefig(FIG_DIR / "grade_mean_gpa_chronic_vs_not.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
 # CHART 5a — Chronic absenteeism by ethnicity (with n sizes)
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -650,7 +611,7 @@ for _tier6 in _SCHOOL_GROUP_ORDER:
             _bar.get_width() + 0.002, _bar.get_y() + _bar.get_height() / 2,
             f"n={_n:,}", va="center", fontsize=8, color="#555555"
         )
-    ax.set_xlabel("Percentage of eligible student-years chronically absent")
+    ax.set_xlabel("Rate of Chronic Absenteeism")
     ax.set_title(f"Chronic Absenteeism Rate — {_tier6} Schools", fontsize=12)
     ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:.0%}"))
     fig.tight_layout()
@@ -731,67 +692,6 @@ print("Wrote total_years_chronically_absent_vs_gpa.png")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# CHART 9 — Improvers by first good-attendance grade (grade in year of first good attendance)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-_m9g = _anc_grade[_anc_grade["current_grade"].between(1, 12)]
-if not _m9g.empty:
-    _counts9_imp = (
-        _m9g.groupby("current_grade", as_index=False)
-        .size()
-        .rename(columns={"size": "n_improvers"})
-        .sort_values("current_grade")
-    )
-    _poor_grade_num = pd.to_numeric(_poor_rows["current_grade"], errors="coerce")
-    _poor_for_chart9 = _poor_rows.loc[_poor_grade_num.notna(), ["student_number"]].copy()
-    _poor_for_chart9["grade"] = _poor_grade_num[_poor_grade_num.notna()].astype(int).values
-    _counts9_poor = (
-        _poor_for_chart9.groupby("grade", as_index=False)["student_number"]
-        .nunique()
-        .rename(columns={"student_number": "n_poor"})
-    )
-    _counts9 = (
-        _counts9_imp.rename(columns={"current_grade": "grade"})
-        .merge(_counts9_poor, on="grade", how="outer")
-        .fillna(0)
-        .sort_values("grade")
-    )
-    _counts9_long = _counts9.melt(
-        id_vars="grade",
-        value_vars=["n_improvers", "n_poor"],
-        var_name="cohort",
-        value_name="n",
-    )
-    _counts9_long["cohort"] = _counts9_long["cohort"].map(
-        {
-            "n_improvers": "Improvers",
-            "n_poor": "Poor Attenders",
-        }
-    )
-    fig, ax = plt.subplots(figsize=(8, 5))
-    sns.set_theme(style="whitegrid")
-    sns.barplot(
-        data=_counts9_long,
-        x="grade",
-        y="n",
-        hue="cohort",
-        hue_order=["Improvers", "Poor Attenders"],
-        palette=["#4c72b0", "#c44e52"],
-        ax=ax,
-    )
-    ax.set_xlabel("Grade")
-    ax.set_ylabel("Total Students")
-    ax.set_title(
-        "Improvers vs Poor Attenders by Grade"
-    )
-    ax.legend(title=None, loc="upper right", fontsize=8)
-    fig.tight_layout()
-    fig.savefig(FIG_DIR / "improvers_count_by_grade.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print("Wrote improvers_count_by_grade.png")
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
 # CHART 10 — Proportion of improvers to poor attenders by grade
 #   Bar at grade G:  (improvers with first-good grade G)
 #                    / (all students with poor attendance in grade G).
@@ -820,31 +720,6 @@ if not _grade_counts.empty:
     fig.savefig(FIG_DIR / "proportion_of_improvers_to_poor_attenders_by_grade.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
     print("Wrote proportion_of_improvers_to_poor_attenders_by_grade.png")
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# CHART 11 — Improvers by school (first good-attendance year)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-_improver_school_counts = (
-    _anc_school.groupby("current_school", as_index=False).size()
-    .rename(columns={"size": "n"})
-    .sort_values("n", ascending=False)
-)
-if not _improver_school_counts.empty:
-    fig, ax = plt.subplots(figsize=(max(10.0, 0.35 * len(_improver_school_counts)), 5))
-    sns.set_theme(style="whitegrid")
-    sns.barplot(data=_improver_school_counts, x="current_school", y="n", color="#4c72b0", ax=ax)
-    ax.set_xlabel("School")
-    ax.set_ylabel("Total Improvers")
-    ax.set_title(
-        "Improvers by School"
-    )
-    plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
-    fig.tight_layout()
-    fig.savefig(FIG_DIR / "improvers_count_by_school.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print("Wrote improvers_count_by_school.png")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

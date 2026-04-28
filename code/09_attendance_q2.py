@@ -41,7 +41,7 @@ def main() -> None:
         exit_num = pd.to_numeric(df["exit_code"], errors="coerce")
         df = df[exit_num.isna() | (exit_num == 0)].copy()
     df = df[df["current_school"].astype(str).str.strip().str.lower() != "other"].copy()
-    df = df[df["year"] >= 2022].copy()
+    # df = df[df["year"] >= 2022].copy()
     df = df[df["school_membership"] >= 60].copy()
     df["student_number"] = df["student_number"].astype(str)
     df["current_school"] = df["current_school"].astype(str).str.strip()
