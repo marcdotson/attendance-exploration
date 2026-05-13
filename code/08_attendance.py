@@ -386,22 +386,37 @@ plt.close(fig)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _pos = {"1", "y", "yes", "true", "t"}
-_eth_dummy_cols = ["amerindian_alaskan", "asian", "black_african_amer", "hawaiian_pacific_isl", "white"]
-_eth_rates = {}
-for _col in _eth_dummy_cols:
+_eth_col_labels = {
+    "amerindian_alaskan":  "Native American",
+    "asian":               "Asian",
+    "black_african_amer":  "Black/African American",
+    "hawaiian_pacific_isl": "Hawaiian/Pacific Islander",
+    "white":               "White",
+}
+_eth_data5 = {}
+for _col, _label in _eth_col_labels.items():
     if _col in _dbase.columns:
         _mask = _dbase[_col].astype(str).str.strip().str.lower().isin(_pos)
-        if _mask.sum() >= MIN_N:
-            _eth_rates[_col] = _dbase.loc[_mask, "_chronic"].mean()
+        _n = int(_mask.sum())
+        if _n >= MIN_N:
+            _eth_data5[_label] = {"rate": _dbase.loc[_mask, "_chronic"].mean(), "n": _n}
 if "ethnicity" in _dbase.columns:
     _lat_mask = _dbase["ethnicity"].astype(str).str.strip().str.lower().isin(_pos)
-    if _lat_mask.sum() >= MIN_N:
-        _eth_rates["latinx"] = _dbase.loc[_lat_mask, "_chronic"].mean()
-if _eth_rates:
-    _eth_series = pd.Series(_eth_rates).sort_values()
-    fig, ax = plt.subplots(figsize=(8, 5))
+    _lat_n = int(_lat_mask.sum())
+    if _lat_n >= MIN_N:
+        _eth_data5["Latinx"] = {"rate": _dbase.loc[_lat_mask, "_chronic"].mean(), "n": _lat_n}
+if _eth_data5:
+    _eth_df5 = pd.DataFrame(_eth_data5).T.sort_values("rate", ascending=True)
+    fig, ax = plt.subplots(figsize=(9, 5))
     sns.set_theme(style="whitegrid")
-    ax.barh(_eth_series.index, _eth_series.values, color="#4c72b0")
+    _bars5 = ax.barh(_eth_df5.index, _eth_df5["rate"], color="#4c72b0")
+    for _bar, (_idx, _row) in zip(_bars5, _eth_df5.iterrows()):
+        ax.text(
+            _bar.get_width() + 0.003, _bar.get_y() + _bar.get_height() / 2,
+            f"n={int(_row['n']):,}", va="center", fontsize=8, color="#555555",
+        )
+    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:.0%}"))
+    ax.set_xlim(0, _eth_df5["rate"].max() * 1.25)
     ax.set_xlabel("Share chronically absent")
     ax.set_title("Chronic Absenteeism Rate by Ethnicity", fontsize=11)
     fig.tight_layout()
@@ -422,7 +437,8 @@ if "gender" in _dbase.columns:
     _glabels = {"M": "Male", "F": "Female"}
     _grps = [g for g in ["M", "F"] if (_gvals == g).any()]
     ax.bar([_glabels[g] for g in _grps], [_dbase.loc[_gvals == g, "_chronic"].mean() for g in _grps], color="#c44e52")
-    ax.set_ylabel("Share chronically absent")
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:.0%}"))
+    ax.set_ylabel("Percent chronically absent")
     ax.set_title("A. Chronic absenteeism rate by gender")
 
 ax = axes[1]
@@ -434,7 +450,8 @@ _dis_rates = (
 )
 if not _dis_rates.empty:
     ax.bar(_dis_rates.index, _dis_rates.values, color=["#4c72b0", "#c44e52"])
-    ax.set_ylabel("Share chronically absent")
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:.0%}"))
+    ax.set_ylabel("Percent chronically absent")
     ax.set_title("B. Chronic absenteeism rate by disability status")
 
 fig.suptitle("Chronic Absenteeism by Gender and Disability Status", fontsize=11, y=1.02)
@@ -449,7 +466,7 @@ plt.close(fig)
 
 from matplotlib.patches import Patch as _Patch
 
-_SCHOOL_GROUP_COLORS = {"Elementary": "#4c72b0", "Middle school": "#55a868", "High school": "#dd8452"}
+_SCHOOL_GROUP_COLORS = {"Elementary": "#4c72b0", "Middle school": "#55a868", "High school": "#c44e52"}
 
 def _school_level(name: str) -> str:
     if "Elem." in name:
@@ -465,7 +482,8 @@ _sagg = (
     .reset_index()
 )
 _sagg["chronic_rate"] = _sagg["n_chronic"] / _sagg["n"]
-_sagg = _sagg[_sagg["n"] >= MIN_N].sort_values("chronic_rate", ascending=True)
+_sagg = _sagg[_sagg["n"] >= MIN_N].copy()
+_sagg = _sagg[~_sagg["_school"].str.lower().isin(["cache high", "other"])].sort_values("chronic_rate", ascending=True)
 _sagg["_group"] = _sagg["_school"].apply(_school_level)
 
 fig, ax = plt.subplots(figsize=(9, max(4, len(_sagg) * 0.45)))
@@ -517,12 +535,8 @@ for _bar, _n in zip(_sbars_elem, _sagg_elem["n"]):
         _bar.get_width() + 0.002, _bar.get_y() + _bar.get_height() / 2,
         f"n={_n:,}", va="center", fontsize=7, color="#555555"
     )
-ax.set_xlabel("Share of eligible student-years chronically absent")
-ax.set_title(
-    "Chronic absenteeism rate by elementary school\n"
-    f"(eligible = school_membership ≥ {MIN_MEMBERSHIP}; chronic = ≥{CHRONIC_ABSENT_PCT:.0f}% days missed)",
-    fontsize=11,
-)
+ax.set_xlabel("Rate of chronic absenteeism")
+ax.set_title("Chronic Absenteeism Rate — Elementary Schools", fontsize=11)
 ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:.0%}"))
 fig.tight_layout()
 fig.savefig(FIG_DIR / "chronic_rate_by_elementary_school.png", dpi=150, bbox_inches="tight")
@@ -552,12 +566,8 @@ for _bar, _n in zip(_sbars_ms, _sagg_ms["n"]):
         _bar.get_width() + 0.002, _bar.get_y() + _bar.get_height() / 2,
         f"n={_n:,}", va="center", fontsize=7, color="#555555"
     )
-ax.set_xlabel("Share of eligible student-years chronically absent")
-ax.set_title(
-    "Chronic absenteeism rate by middle school\n"
-    f"(eligible = school_membership ≥ {MIN_MEMBERSHIP}; chronic = ≥{CHRONIC_ABSENT_PCT:.0f}% days missed)",
-    fontsize=11,
-)
+ax.set_xlabel("Rate of chronic absenteeism")
+ax.set_title("Chronic Absenteeism Rate — Middle Schools", fontsize=11)
 ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:.0%}"))
 fig.tight_layout()
 fig.savefig(FIG_DIR / "chronic_rate_by_middle_school.png", dpi=150, bbox_inches="tight")
@@ -580,7 +590,8 @@ _sagg_hs = (
     .reset_index()
 )
 _sagg_hs["chronic_rate"] = _sagg_hs["n_chronic"] / _sagg_hs["n"]
-_sagg_hs = _sagg_hs[_sagg_hs["n"] >= MIN_N].sort_values("chronic_rate", ascending=True)
+_sagg_hs = _sagg_hs[_sagg_hs["n"] >= MIN_N].copy()
+_sagg_hs = _sagg_hs[~_sagg_hs["_school"].str.lower().isin(["cache high", "other"])].sort_values("chronic_rate", ascending=True)
 
 fig, ax = plt.subplots(figsize=(9, max(4, len(_sagg_hs) * 0.45)))
 sns.set_theme(style="whitegrid")
@@ -591,11 +602,8 @@ for _bar, _n in zip(_sbars_hs, _sagg_hs["n"]):
         _bar.get_width() + 0.002, _bar.get_y() + _bar.get_height() / 2,
         f"n={_n:,}", va="center", fontsize=7, color="#555555"
     )
-ax.set_xlabel("Share of eligible student-years chronically absent")
-ax.set_title(
-    "Chronic absenteeism rate by high school\n"
-    f"(eligible = school_membership ≥ {MIN_MEMBERSHIP}; chronic = ≥{CHRONIC_ABSENT_PCT:.0f}% days missed)",
-    fontsize=11,
+ax.set_xlabel("Rate of chronic absenteeism")
+ax.set_title("Chronic Absenteeism Rate — High Schools", fontsize=11,
 )
 ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:.0%}"))
 fig.tight_layout()
@@ -1175,17 +1183,22 @@ _poor14 = _sy14[_sy14["pct"] < 90.0][["student_number", "year"]].rename(columns=
 _good14 = _sy14[_sy14["pct"] >= 95.0][["student_number", "year"]].rename(columns={"year": "good_year"})
 _oyt = _poor14.merge(_good14, on="student_number", how="inner")
 _oyt = _oyt[_oyt["good_year"] == _oyt["poor_year"] + 1].drop_duplicates(subset=["student_number", "poor_year"])
+_oyt = _oyt.sort_values("poor_year").drop_duplicates(subset="student_number", keep="first")
 
 if _tg_path.is_file() and not _oyt.empty:
     _tgrid = pd.read_csv(_tg_path)
     _tcols = [c for c in _tgrid.columns if c.startswith("teacher_")]
     _tgrid["student_number"] = _tgrid["student_number"].astype(str)
     _tgrid["year"] = pd.to_numeric(_tgrid["year"], errors="coerce")
-    _exp = _oyt.merge(_tgrid, left_on=["student_number", "poor_year"], right_on=["student_number", "year"], how="inner")
+    _exp = _oyt.merge(_tgrid, left_on=["student_number", "good_year"], right_on=["student_number", "year"], how="inner")
     if not _exp.empty and _tcols:
-        _n_trans14 = _exp[_tcols].sum(axis=0).astype(int)
-        _poor_sy14 = _base_imp[_base_imp["percent_days_attended"] < 90.0][["student_number", "year"]].drop_duplicates()
-        _merged_poor14 = _tgrid[["student_number", "year"] + _tcols].merge(_poor_sy14, on=["student_number", "year"], how="inner")
+        _n_trans14 = (_exp[_tcols] > 0).sum(axis=0).astype(int)
+        _poor14_shifted = _poor14.copy()
+        _poor14_shifted["lookup_year"] = _poor14_shifted["poor_year"] + 1
+        _merged_poor14 = _tgrid[["student_number", "year"] + _tcols].merge(
+            _poor14_shifted[["student_number", "lookup_year"]],
+            left_on=["student_number", "year"], right_on=["student_number", "lookup_year"], how="inner"
+        )
         _n_poor14 = (_merged_poor14[_tcols] > 0).sum(axis=0).astype(int)
         _enrolled_sy14 = _base_imp[["student_number", "year"]].drop_duplicates()
         _merged_enrolled14 = _tgrid[["student_number", "year"] + _tcols].merge(_enrolled_sy14, on=["student_number", "year"], how="inner")
@@ -1197,7 +1210,7 @@ if _tg_path.is_file() and not _oyt.empty:
             "n_poor":     _n_poor14.reindex(_n_trans14.index).fillna(0).astype(int).values,
             "n_enrolled": _n_enrolled14.reindex(_n_trans14.index).fillna(0).astype(int).values,
         })
-        _tc = _tc[_tc["n_trans"] > 0].copy()
+        _tc = _tc[(_tc["n_trans"] > 0) & (_tc["n_poor"] >= 10)].copy()
         _tc["ratio"] = np.where(_tc["n_poor"] > 0, _tc["n_trans"] / _tc["n_poor"], np.nan)
         if not _tc.empty:
             if len(_tc) == 1:
@@ -1207,7 +1220,8 @@ if _tg_path.is_file() and not _oyt.empty:
                 _pool = _tc[_tc["n_enrolled"] > _avg_load].sort_values(["ratio", "n_trans"], ascending=[False, False])
 
             if not _pool.empty:
-                _affiliation: dict[str, set[str]] = {}
+                # Step 1: build static affiliations from curated CSV files
+                _affiliation_static: dict[str, set[str]] = {}
                 for _aff_path in (_hs_path, _ms_path, _es_path):
                     if not _aff_path.is_file():
                         continue
@@ -1216,7 +1230,25 @@ if _tg_path.is_file() and not _oyt.empty:
                         _school14 = str(_sch_name).strip()
                         for _col in _tcols:
                             if _col in _aff_grid.columns and pd.notna(_aff_row[_col]) and float(_aff_row[_col]) >= 1:
-                                _affiliation.setdefault(_col, set()).add(_school14)
+                                _affiliation_static.setdefault(_col, set()).add(_school14)
+
+                # Step 2: find which schools each teacher has students at in the 2022+ data
+                _base_sn = _base_imp[["student_number", "year", "current_school"]].drop_duplicates(subset=["student_number", "year"], keep="first").copy()
+                _base_sn["student_number"] = _base_sn["student_number"].astype(str)
+                _tgrid_with_school = _tgrid.merge(_base_sn, on=["student_number", "year"], how="inner")
+                _recent_schools: dict[str, set[str]] = {}
+                for _col in _tcols:
+                    for _s in _tgrid_with_school.loc[_tgrid_with_school[_col] > 0, "current_school"].dropna().unique():
+                        _s_str = str(_s).strip()
+                        if _s_str and _s_str != "nan":
+                            _recent_schools.setdefault(_col, set()).add(_s_str)
+
+                # Step 3: intersect — keep only static affiliations confirmed by recent data
+                _affiliation: dict[str, set[str]] = {
+                    _col: _affiliation_static[_col] & _recent_schools.get(_col, set())
+                    for _col in _affiliation_static
+                    if _affiliation_static[_col] & _recent_schools.get(_col, set())
+                }
 
                 _ms_teacher_set = {
                     t for t, schools in _affiliation.items()
@@ -1235,7 +1267,7 @@ if _tg_path.is_file() and not _oyt.empty:
                     fig, ax = plt.subplots(figsize=(14, max(4, len(sub) * 0.7)))
                     sns.set_theme(style="whitegrid")
                     sns.barplot(data=sub, x="ratio_plot", y="teacher", color=color, ax=ax)
-                    ax.set_xlabel("Improvers / All Poor Attenders")
+                    ax.set_xlabel("Improved / Previously Poor-Attending Students in Class")
                     ax.set_ylabel("Teacher")
                     ax.set_title(title)
                     _mx = float(sub["ratio_plot"].max()) if not sub.empty else 0.0
@@ -1259,7 +1291,7 @@ if _tg_path.is_file() and not _oyt.empty:
                 # ── CHART 21 ──────────────────────────────────────────────────
                 _plot_top_teachers(
                     _pool, _ms_teacher_set, 10,
-                    "Top 10 Middle School Teachers by Percentage of Improvers",
+                    "Top 10 Middle School Teachers: 1-Year Attendance Turnaround Rate",
                     "top_10_ms_teachers_by_percentage_of_improvers.png",
                     _SCHOOL_GROUP_COLORS["Middle school"],
                 )
@@ -1267,11 +1299,66 @@ if _tg_path.is_file() and not _oyt.empty:
                 # ── CHART 22 ──────────────────────────────────────────────────
                 _plot_top_teachers(
                     _pool, _hs_teacher_set, 10,
-                    "Top 10 High School Teachers by Percentage of Improvers",
+                    "Top 10 High School Teachers: 1-Year Attendance Turnaround Rate",
                     "top_10_hs_teachers_by_percentage_of_improvers.png",
                     _SCHOOL_GROUP_COLORS["High school"],
                 )
 
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CHART 23 — Sky View policy impact: mean attendance trend (2022–2025)
+# Policy: teacher-driven engagement implemented 2024-25 school year
+# ═══════════════════════════════════════════════════════════════════════════════
+_sv_schools  = ["Green Canyon", "Mountain Crest", "Ridgeline", "Sky View"]
+_sv_colors   = {"Sky View": "#d62728", "Green Canyon": "#aaaaaa",
+                "Mountain Crest": "#aaaaaa", "Ridgeline": "#aaaaaa"}
+_sv_policy_year = 2025  # 2024-25 school year (end-year convention)
+
+_sv_hs = df[
+    df["current_school"].isin(_sv_schools) &
+    (df["school_membership"] >= MIN_MEMBERSHIP) &
+    df["percent_days_attended"].notna() &
+    df["year"].notna() &
+    (df["year"] >= 2022)
+].copy()
+
+_sv_agg = (
+    _sv_hs.groupby(["current_school", "year"])
+    .agg(mean_att=("percent_days_attended", "mean"))
+    .reset_index()
+)
+_sv_agg["year"] = _sv_agg["year"].astype(int)
+_sv_years = sorted(_sv_agg["year"].unique())
+
+fig, ax = plt.subplots(figsize=(10, 5))
+sns.set_theme(style="whitegrid")
+for _sv_school in _sv_schools:
+    _sv_sub = _sv_agg[_sv_agg["current_school"] == _sv_school].sort_values("year")
+    _sv_clr = _sv_colors[_sv_school]
+    _sv_lw  = 2.5 if _sv_school == "Sky View" else 1.2
+    _sv_zo  = 3   if _sv_school == "Sky View" else 1
+    _sv_ms  = 6   if _sv_school == "Sky View" else 4
+    ax.plot(_sv_sub["year"], _sv_sub["mean_att"],
+            color=_sv_clr, lw=_sv_lw, marker="o", ms=_sv_ms, zorder=_sv_zo,
+            label=_sv_school)
+
+_sv_ylims  = ax.get_ylim()
+_sv_yrange = _sv_ylims[1] - _sv_ylims[0]
+ax.axvline(_sv_policy_year - 0.5, color="black", ls=":", lw=1.2, alpha=0.6)
+ax.text(_sv_policy_year - 0.42, _sv_ylims[1] - _sv_yrange * 0.02,
+        "Policy implemented\n(2024–25 →)", fontsize=8, va="top", ha="left")
+ax.set_xticks(_sv_years)
+ax.set_xticklabels(_sv_years)
+ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.1f}%"))
+ax.set_xlabel("Year (end of school year)")
+ax.set_ylabel("Mean Attendance Rate (% days attended)")
+ax.set_title("Mean Attendance Rate by High School (2022–2025)\nSky View policy implemented 2024–25")
+ax.legend(title="School", bbox_to_anchor=(1.01, 1), loc="upper left", fontsize=9)
+fig.tight_layout()
+fig.savefig(FIG_DIR / "skyview_policy_mean_attendance_trend.png", dpi=150, bbox_inches="tight")
+plt.close(fig)
+print("Wrote skyview_policy_mean_attendance_trend.png")
 
 
 print(f"\nDone. Figures written to: {FIG_DIR}")
