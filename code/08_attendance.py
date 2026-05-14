@@ -7,6 +7,7 @@ import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from plotnine import *
 
 ROOT      = Path(__file__).resolve().parent.parent
 DATA_PATH = ROOT / "data" / "exploratory_data.csv"
@@ -1379,3 +1380,201 @@ print("Wrote skyview_policy_mean_attendance_trend.png")
 
 
 print(f"\nDone. Figures written to: {FIG_DIR}")
+
+
+import geopandas as gpd
+import io
+
+# ── Geo map paths & helpers ────────────────────────────────────────────────────
+_HS_POLY = ROOT / "data" / "High Schools Boundary Maps" / "High Schools-POLYGON.shp"
+_MS_DIR  = ROOT / "data" / "Middle Schools Boundary Map"
+_ES_POLY = ROOT / "data" / "Elementary Boundary Maps" / "Elementary Boundary.shp"
+
+# Convert polygons to long-form coordinate df for geom_polygon (from 09_geo-example.py)
+def _gdf_to_coords(gdf, id_col="att_school"):
+    rows = []
+    for _, row in gdf.iterrows():
+        geom = row.geometry
+        polys = [geom] if geom.geom_type == "Polygon" else list(geom.geoms)
+        for poly in polys:
+            xs, ys = poly.exterior.xy
+            for x, y in zip(xs, ys):
+                rows.append({id_col: row[id_col], "lon": x, "lat": y})
+    return pd.DataFrame(rows)
+
+def _geo_school_metrics(schools):
+    rows = []
+    for s in schools:
+        sub = _cbase[_cbase["current_school"] == s]
+        if len(sub) < 10:
+            rows.append({"school": s, "mean_att": np.nan, "chronic_rate": np.nan, "improver_rate": np.nan})
+            continue
+        n_poor  = _poor_rows_anchor_school[_poor_rows_anchor_school["current_school"] == s]["student_number"].nunique()
+        n_trans = _anc_school[_anc_school["current_school"] == s]["student_number"].nunique()
+        rows.append({
+            "school":        s,
+            "mean_att":      sub["percent_days_attended"].mean(),
+            "chronic_rate":  sub["_chronic"].mean() * 100,
+            "improver_rate": (n_trans / n_poor * 100) if n_poor > 0 else np.nan,
+        })
+    return pd.DataFrame(rows)
+
+def _prep_geo(gdf, label_map, metrics):
+    if gdf.crs is None:
+        gdf = gdf.set_crs("EPSG:4326")
+    gdf = gdf[["att_school", "geometry"]].dissolve(by="att_school", as_index=False)
+    gdf = gdf.merge(metrics.rename(columns={"school": "att_school"}), on="att_school", how="left")
+    gdf_proj = gdf.to_crs("EPSG:3857")
+    centroids = gdf_proj.geometry.centroid.to_crs("EPSG:4326")
+    labels_df = pd.DataFrame({
+        "att_school": gdf["att_school"],
+        "label": gdf["att_school"].map(label_map).fillna(gdf["att_school"]),
+        "lon": centroids.x,
+        "lat": centroids.y,
+    })
+    coords = _gdf_to_coords(gdf)
+    coords = coords.merge(
+        gdf[["att_school", "mean_att", "chronic_rate", "improver_rate"]],
+        on="att_school", how="left",
+    )
+    return coords, labels_df
+
+def _make_geo_plot(coords, labels_df, fill_col, fill_label, palette, title):
+    return (
+        ggplot(coords, aes(x="lon", y="lat", group="att_school", fill=fill_col))
+        + geom_polygon(color="white", size=0.5, alpha=0.85)
+        + geom_text(
+            data=labels_df,
+            mapping=aes(x="lon", y="lat", label="label", group="att_school"),
+            size=7,
+            color="#1a1a1a",
+            fontweight="bold",
+            inherit_aes=False,
+        )
+        + scale_fill_distiller(palette=palette, direction=1, name=fill_label)
+        + coord_fixed()
+        + labs(title=title, x=None, y=None)
+        + theme_void()
+        + theme(
+            plot_title=element_text(size=12, face="bold", ha="center"),
+            figure_size=(9, 8),
+        )
+    )
+
+def _save_combined_geo(plots, suptitle, filename):
+    arrays = []
+    for p in plots:
+        buf = io.BytesIO()
+        p.save(buf, format="png", dpi=150, verbose=False)
+        buf.seek(0)
+        arrays.append(plt.imread(buf))
+    fig, axes = plt.subplots(1, 3, figsize=(28, 9))
+    for ax, arr in zip(axes, arrays):
+        ax.imshow(arr)
+        ax.axis("off")
+    fig.suptitle(suptitle, fontsize=14, fontweight="bold", y=1.01)
+    fig.tight_layout()
+    fig.savefig(FIG_DIR / filename, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Wrote {filename}")
+
+# Name maps: shapefile Name (after \xa0 fix) → (short display label, attendance data key)
+_HS_MAP = {
+    "Sky View High School":     ("Sky View",      "Sky View"),
+    "Green Canyon High School": ("Green Canyon",  "Green Canyon"),
+    "Ridgeline High School":    ("Ridgeline",     "Ridgeline"),
+    "Mt. Crest High School":    ("Mt. Crest",     "Mountain Crest"),
+}
+_MS_MAP = {
+    "North Cache Middle School":  ("North Cache",  "North Cache Middle"),
+    "South Cache Middle School":  ("South Cache",  "South Cache Middle"),
+    "Spring Creek Middle School": ("Spring Creek", "Spring Creek Middle"),
+}
+# Wellesville is a typo in the attendance CSV; the shapefile has Wellsville.
+_ES_MAP = {
+    "Birch Creek Elementary":   ("Birch Creek",   "Birch Creek Elem."),
+    "Canyon Elementary":        ("Canyon",         "Canyon Elem."),
+    "Cedar Ridge Elementary":   ("Cedar Ridge",    "Cedar Ridge Elem."),
+    "Greenville Elementary":    ("Greenville",     "Greenville Elem."),
+    "Heritage Elementary":      ("Heritage",       "Heritage Elem."),
+    "Lewiston Elementary":      ("Lewiston",       "Lewiston Elem."),
+    "Lincoln Elementary":       ("Lincoln",        "Lincoln Elem."),
+    "Millville Elementary":     ("Millville",      "Millville Elem."),
+    "Mountainside Elementary":  ("Mountainside",   "Mountainside Elem."),
+    "Nibley Elementary":        ("Nibley",         "Nibley Elem."),
+    "North Park Elementary":    ("North Park",     "North Park Elem."),
+    "Providence Elementary":    ("Providence",     "Providence Elem."),
+    "River Heights Elementary": ("River Heights",  "River Heights Elem."),
+    "Summit Elementary":        ("Summit",         "Summit Elem."),
+    "Sunrise Elementary":       ("Sunrise",        "Sunrise Elem."),
+    "Wellsville Elementary":    ("Wellsville",     "Wellesville Elem."),
+    "White Pine Elementary":    ("White Pine",     "White Pine Elem."),
+}
+
+# Prepare GeoDataFrames and coord/label tables once per level
+_gdf_hs = gpd.read_file(_HS_POLY)
+_gdf_hs["Name"]       = _gdf_hs["Name"].str.replace("\xa0", " ", regex=False)
+_gdf_hs["att_school"] = _gdf_hs["Name"].map({k: v[1] for k, v in _HS_MAP.items()})
+_hs_metrics            = _geo_school_metrics([v[1] for v in _HS_MAP.values()])
+_hs_coords, _hs_labels = _prep_geo(_gdf_hs, {v[1]: v[0] for v in _HS_MAP.values()}, _hs_metrics)
+
+_ms_parts = []
+for _shp in sorted(_MS_DIR.glob("*-POLYGON.shp")):
+    _g = gpd.read_file(_shp)
+    _g["Name"]       = _g["Name"].str.replace("\xa0", " ", regex=False)
+    _g["att_school"] = _g["Name"].map({k: v[1] for k, v in _MS_MAP.items()})
+    _ms_parts.append(_g)
+_gdf_ms = gpd.GeoDataFrame(pd.concat(_ms_parts, ignore_index=True), geometry="geometry")
+_ms_metrics            = _geo_school_metrics([v[1] for v in _MS_MAP.values()])
+_ms_coords, _ms_labels = _prep_geo(_gdf_ms, {v[1]: v[0] for v in _MS_MAP.values()}, _ms_metrics)
+
+_gdf_es = gpd.read_file(_ES_POLY)
+_gdf_es["Name"]       = _gdf_es["Name"].str.replace("\xa0", " ", regex=False)
+_gdf_es["att_school"] = _gdf_es["Name"].map({k: v[1] for k, v in _ES_MAP.items()})
+_es_metrics            = _geo_school_metrics([v[1] for v in _ES_MAP.values()])
+_es_coords, _es_labels = _prep_geo(_gdf_es, {v[1]: v[0] for v in _ES_MAP.values()}, _es_metrics)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CHART 24 — Geographic: mean attendance rate by school boundary (all levels)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_save_combined_geo(
+    plots=[
+        _make_geo_plot(_hs_coords, _hs_labels, "mean_att", "Mean Attendance (%)", "Blues", "High Schools"),
+        _make_geo_plot(_ms_coords, _ms_labels, "mean_att", "Mean Attendance (%)", "Blues", "Middle Schools"),
+        _make_geo_plot(_es_coords, _es_labels, "mean_att", "Mean Attendance (%)", "Blues", "Elementary Schools"),
+    ],
+    suptitle="Mean Attendance Rate (%) by School Attendance Boundary",
+    filename="geo_mean_att.png",
+)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CHART 25 — Geographic: chronic absenteeism rate by school boundary (all levels)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_save_combined_geo(
+    plots=[
+        _make_geo_plot(_hs_coords, _hs_labels, "chronic_rate", "Chronic Absenteeism (%)", "Reds", "High Schools"),
+        _make_geo_plot(_ms_coords, _ms_labels, "chronic_rate", "Chronic Absenteeism (%)", "Reds", "Middle Schools"),
+        _make_geo_plot(_es_coords, _es_labels, "chronic_rate", "Chronic Absenteeism (%)", "Reds", "Elementary Schools"),
+    ],
+    suptitle="Chronic Absenteeism Rate (%) by School Attendance Boundary",
+    filename="geo_chronic.png",
+)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CHART 26 — Geographic: improver rate by school boundary (all levels)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_save_combined_geo(
+    plots=[
+        _make_geo_plot(_hs_coords, _hs_labels, "improver_rate", "Improver Rate (%, 2022–2025)", "Greens", "High Schools"),
+        _make_geo_plot(_ms_coords, _ms_labels, "improver_rate", "Improver Rate (%, 2022–2025)", "Greens", "Middle Schools"),
+        _make_geo_plot(_es_coords, _es_labels, "improver_rate", "Improver Rate (%, 2022–2025)", "Greens", "Elementary Schools"),
+    ],
+    suptitle="Improver Rate (%, 2022–2025) by School Attendance Boundary",
+    filename="geo_improvers.png",
+)
