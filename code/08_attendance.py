@@ -79,9 +79,9 @@ _good_rows = _good_rows[_good_rows["year"] > _good_rows["first_poor_year"]]
 _first_good_yr = _good_rows.groupby("student_number")["year"].min().rename("first_good_year")
 _improvers = pd.concat([_first_poor_yr, _first_good_yr], axis=1).dropna()
 
-# Anchor at first_good_year - 1 (the year the student was transitioning out of poor attendance)
+# Anchor at first_good_year (the year the student achieved good attendance)
 _anchor = _improvers.reset_index()[["student_number", "first_good_year"]].copy()
-_anchor["anchor_year"] = _anchor["first_good_year"] - 1
+_anchor["anchor_year"] = _anchor["first_good_year"]
 
 _sg_lookup = (_base_imp[["student_number", "year", "current_school", "current_grade"]]
               .drop_duplicates(subset=["student_number", "year"], keep="first"))
@@ -92,9 +92,8 @@ _trans_anchor = (_anchor
 _anc_grade  = _trans_anchor.dropna(subset=["current_grade"])
 _anc_school = _trans_anchor.dropna(subset=["current_school"])
 
-# Denominator: poor rows in anchor years only (matches 09_attendance_q2.py poor_rows_for_anchor)
-_poor_rows_anchor = (_poor_rows[_poor_rows["year"].isin(_anchor["anchor_year"].unique())]
-                     .drop_duplicates(subset=["student_number", "year"], keep="first"))
+# Denominator: all poor rows across all years (numerator is improvement year, so denominator spans full history)
+_poor_rows_anchor = _poor_rows.drop_duplicates(subset=["student_number", "year"], keep="first")
 _poor_rows_anchor_school = _poor_rows_anchor.dropna(subset=["current_school"])
 
 
@@ -971,9 +970,16 @@ for _bar, _row in zip(_bars18, _rate_by_yr18.itertuples()):
         f"n={_row.n:,}", ha="center", fontsize=8, color="#555555",
     )
 ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:.0%}"))
-ax.set_xlabel("Years chronically absent")
+ax.set_xlabel("Years chronically absent\n(Disability = SCRAM membership > 0)")
 ax.set_ylabel("Share of students with a disability")
 ax.set_title("Disability Rate by Number of Chronic Absence Years")
+fig.text(
+    0.5, -0.04,
+    "Note: Disability is measured by SCRAM membership (health accommodation services).\n"
+    "Students classified as severely disabled (IsOnePercent = Y) were excluded from this dataset.",
+    ha="center", fontsize=8, color="#666666", style="italic",
+    wrap=True,
+)
 fig.tight_layout()
 fig.savefig(FIG_DIR / "disability_chronic_absence.png", dpi=150, bbox_inches="tight")
 plt.close(fig)
@@ -1092,7 +1098,7 @@ if not _grade_counts.empty:
     fig, ax = plt.subplots(figsize=(9, 5))
     sns.set_theme(style="whitegrid")
     sns.barplot(data=_grade_counts, x="grade", y="n", color="#8172b3", ax=ax)
-    ax.set_xlabel("Grade (at Last Poor-Attending Year)")
+    ax.set_xlabel("Grade (at Year of Improvement)")
     ax.set_ylabel("Improvers / All Poor Attenders")
     ax.set_title("Percentage of Improvers by Grade")
     fig.tight_layout()
@@ -1136,7 +1142,7 @@ if not _group_counts.empty:
     fig, ax = plt.subplots(figsize=(8, 5))
     sns.set_theme(style="whitegrid")
     sns.barplot(data=_group_counts, x="school_group", y="n", color="#55a868", ax=ax)
-    ax.set_xlabel("School Group (at Last Poor-Attending Year)")
+    ax.set_xlabel("School Group (at Year of Improvement)")
     ax.set_ylabel("Improvers / All Poor Attenders")
     ax.set_title("Percentage of Improvers by School Group")
     fig.tight_layout()
@@ -1153,16 +1159,27 @@ _n_trans12 = _anc_school.groupby("current_school")["student_number"].nunique().r
 _n_poor12  = _poor_rows_anchor_school.groupby("current_school")["student_number"].nunique().rename("n_poor")
 _school_counts = pd.concat([_n_trans12, _n_poor12], axis=1).fillna({"n_trans": 0, "n_poor": 0}).reset_index()
 _school_counts = _school_counts[_school_counts["n_poor"] > 0].copy()
+_school_counts = _school_counts[_school_counts["current_school"].str.lower() != "cache high"].copy()
 _school_counts["n"] = _school_counts["n_trans"] / _school_counts["n_poor"]
+_school_counts["_group"] = _school_counts["current_school"].map(_group_label)
 _school_counts = _school_counts.sort_values("n", ascending=False)
 
 if not _school_counts.empty:
     fig, ax = plt.subplots(figsize=(max(10.0, 0.38 * len(_school_counts)), 5))
     sns.set_theme(style="whitegrid")
-    sns.barplot(data=_school_counts, x="current_school", y="n", color="#4c72b0", ax=ax)
-    ax.set_xlabel("School (at Last Poor-Attending Year)")
+    sns.barplot(
+        data=_school_counts, x="current_school", y="n",
+        palette={s: _SCHOOL_GROUP_COLORS[g] for s, g in zip(_school_counts["current_school"], _school_counts["_group"])},
+        ax=ax,
+    )
+    ax.set_xlabel("School (at Year of Improvement)")
     ax.set_ylabel("Improvers / All Poor Attenders")
     ax.set_title("Percentage of Improvers by School")
+    ax.legend(
+        handles=[_Patch(color=_SCHOOL_GROUP_COLORS[g], label=g)
+                 for g in ["Elementary", "Middle school", "High school"]],
+        title="School group", fontsize=8, loc="upper right",
+    )
     plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
     fig.tight_layout()
     fig.savefig(FIG_DIR / "percentage_of_improvers_by_school.png", dpi=150, bbox_inches="tight")
