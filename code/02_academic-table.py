@@ -56,7 +56,7 @@ def process_numeric_student_columns(student_table, model_df, df, columns, rename
 
 ######################################################################################################################################################
 # Load Extracurricular file that contains a list of extracurricular classes
-extracurricular_list = pd.read_excel('data/Extracurricular Classes.xlsx')
+extracurricular_list = pd.read_excel('C:/Users/emmar/Git Repositories/attendance-exploration-1/data/Extracurricular Classes.xlsx')
 extracurricular_list.head()
 # Create two empty dictionaries to store df and model_df for each year: df_dict and model_dict
 df_dict = {}
@@ -272,6 +272,42 @@ for year in years:
 
 
     ######################################################################################################################################################
+    # Build a middle school GPA from Course Membership when transcript GPA is missing.
+    # Middle school schools are SchoolNumber values between 300 and 399 (inclusive).
+    # Only numeric GradeEarned values are included.
+    middle_school_grades = membership[['student_number', 'SchoolNumber', 'GradeEarned']].copy()
+    middle_school_grades['student_number'] = middle_school_grades['student_number'].astype(str)
+    middle_school_grades['school_number_numeric'] = pd.to_numeric(middle_school_grades['SchoolNumber'], errors='coerce')
+    middle_school_grades = middle_school_grades[
+        middle_school_grades['school_number_numeric'].between(300, 499, inclusive='both')
+    ]
+    middle_school_grades['GradeEarned'] = pd.to_numeric(
+        middle_school_grades['GradeEarned'].astype(str).str.strip(),
+        errors='coerce'
+    )
+    middle_school_grades = middle_school_grades.dropna(subset=['GradeEarned'])
+
+    # Exclude students that already have transcript GPA in Student table.
+    transcript_gpa_status = student_table[['student_number', 'CumulativeGPA']].copy()
+    transcript_gpa_status['student_number'] = transcript_gpa_status['student_number'].astype(str)
+    transcript_gpa_status['CumulativeGPA'] = pd.to_numeric(transcript_gpa_status['CumulativeGPA'], errors='coerce')
+    students_without_transcript_gpa = transcript_gpa_status[
+        transcript_gpa_status['CumulativeGPA'].isna() | (transcript_gpa_status['CumulativeGPA'] <= 0)
+    ]['student_number'].drop_duplicates()
+    middle_school_grades = middle_school_grades[
+        middle_school_grades['student_number'].isin(students_without_transcript_gpa)
+    ]
+
+    middle_school_gpa = middle_school_grades.groupby('student_number', as_index=False)['GradeEarned'].mean()
+    middle_school_gpa = middle_school_gpa.rename(columns={'GradeEarned': 'middle_school_gpa'})
+    middle_school_gpa['middle_school_gpa'] = middle_school_gpa['middle_school_gpa'].astype(float).round(3)
+
+    # Merge the derived middle school GPA for later fallback into overall_gpa.
+    df = pd.merge(df, middle_school_gpa, on='student_number', how='left')
+    model_df = pd.merge(model_df, middle_school_gpa, on='student_number', how='left')
+
+
+    ######################################################################################################################################################
     # Call the function above to process the numeric columns
     # Columns to process from the student_table
     columns_to_process = ['GradeLevel', 'DaysAttended', 'SchoolMembership', 'CumulativeGPA', 'ExcusedAbsences', 'UnexcusedAbsences', 'AbsencesDueToSuspension']
@@ -294,6 +330,12 @@ for year in years:
 
     # Call the function with filtered columns and rename map
     model_df, df = process_numeric_student_columns(student_table, model_df, df, existing_columns, existing_rename_map)
+
+    # Fill transcript GPA gaps with derived middle school GPA.
+    df['overall_gpa'] = pd.to_numeric(df['overall_gpa'], errors='coerce')
+    model_df['overall_gpa'] = pd.to_numeric(model_df['overall_gpa'], errors='coerce')
+    df['overall_gpa'] = df['overall_gpa'].fillna(df['middle_school_gpa'])
+    model_df['overall_gpa'] = model_df['overall_gpa'].fillna(model_df['middle_school_gpa'])
 
     ######################################################################################################################################################
     # Add the scram data to df and model_df
@@ -423,10 +465,11 @@ for year in years:
     else:
         # For years without detailed absence columns, absences are calculated as the difference between school_membership and days_attended
         df_year['days_absent'] = df_year['school_membership'] - df_year['days_attended']
+        df_year['days_absent'] = df_year['days_absent'].clip(lower=0)  # prevent negatives
     
     # Update days_attended and school_membership to 180 if days_attended is > 180 or school_membership is > 180
-    df_year.loc[(df['days_attended'] > 180), 'days_attended'] = 180
-    df_year.loc[(df['school_membership'] > 180), 'school_membership'] = 180
+    df_year.loc[(df_year['days_attended'] > 180), 'days_attended'] = 180
+    df_year.loc[(df_year['school_membership'] > 180), 'school_membership'] = 180
 
     # Update school_membership to 180 if school_membership is < days_attended and days_attended is not 0
     df_year.loc[
@@ -554,6 +597,12 @@ df.loc[df['school_membership'] == 0, 'percent_days_attended'] = np.nan  # Avoid 
 # Round percent_days_attended to two decimal places
 df['percent_days_attended'] = pd.to_numeric(df['percent_days_attended'], errors='coerce')
 df['percent_days_attended'] = df['percent_days_attended'].round(2)
+
+
+# Create chronic abseentism and good attendance columns
+#df['is_chronic_absent'] = ((df['school_membership'] > 60) & ((df['days_attended'] / df['school_membership'].replace(0, np.nan)) < 0.90)).astype(int)
+df['has_good_attendance'] = ((df['days_attended'] / df['school_membership'].replace(0, np.nan)) >= 0.95).astype(int)
+df['is_chronic_absent'] = (((df['percent_days_attended']) < 90) & (df['school_membership']> 60)).astype(int)
 
 df.head()
 
@@ -702,9 +751,12 @@ model_df = model_df.drop(columns=[col for col in model_columns_to_drop if col in
 # Prepare the data for export
 
 # Specify the column order for the df
-df_columns = ['student_number', 'ac_ind', 'ac_count', 'ac_gpa', 'dli_ind', 'dli_count', 'overall_gpa', 'days_attended', 'days_absent',
-            'school_membership', 'percent_days_attended', 'extracurricular_ind', 'extracurricular_count', 'current_grade',
-            'scram_membership', 'regular_percent', 'environment', 'extended_school_year', 'year']
+
+df_columns = ['student_number', 'ac_ind', 'ac_count', 'ac_gpa', 'dli_ind', 'dli_count', 'overall_gpa', 
+              'days_attended', 'days_absent', 'school_membership', 'percent_days_attended',
+              'is_chronic_absent', 'has_good_attendance',  
+              'extracurricular_ind', 'extracurricular_count', 'current_grade',
+              'scram_membership', 'regular_percent', 'environment', 'extended_school_year', 'year']
 
 df = df[df_columns]
 df = df.drop_duplicates(keep='first')
